@@ -1,9 +1,9 @@
 // Deterministic reconciliation of a receipt's line items against the amount claimed.
 //
 // The system prompt has always told the model to "double-check that the receipt totals add
-// up", but nothing ever summed line_items — and the tool offered for the job,
-// validate_expense, only checks that fields are present. It returns {valid:true} for a
-// submission claiming ten times its own line items.
+// up", but nothing ever summed line_items. The tool once offered for the job,
+// validate_expense, only checked that fields were present — it returned {valid:true} for a
+// submission claiming ten times its own line items, and has since been removed.
 //
 // Arithmetic is not a job for a language model. This does it in code and hands the model a
 // fact, so the decision rests on a computed number rather than on the model eyeballing a

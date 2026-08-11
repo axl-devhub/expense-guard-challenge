@@ -1,10 +1,11 @@
 // Fail-closed guardrail on a decision's citation.
 //
-// `cited_rule` is a free-form string the model writes, and `cited_rule_id` names the rule
-// it claims to be applying. Nothing upstream constrains either to the rules search_policy
-// actually returned, so a decision can cite a rule belonging to another tenant (what the
-// policy-store cache bug produced) or one that exists nowhere at all. This runs server-side
-// against the company_id from the request — never a model-supplied value.
+// `cited_rule_id` names the rule the decision claims to be applying, and `modelFreeText` is
+// the model's own prose about it (today: the `reason` field). Nothing upstream constrains
+// either to the rules search_policy actually returned, so a decision can cite a rule
+// belonging to another tenant (what the policy-store cache bug produced) or one that exists
+// nowhere at all. This runs server-side against the company_id from the request — never a
+// model-supplied value.
 //
 // It answers one question: does the cited rule belong to THIS company's policy? It does not
 // judge whether the rule justifies the decision.
@@ -112,7 +113,7 @@ function foreignOrUnknownRule(companyId: string, ruleId: string, where: string):
 export function verifyCitation(
   companyId: string,
   citedRuleId: string,
-  citedRule: string,
+  modelFreeText: string,
 ): tCitationCheck {
   let ownPolicy;
   try {
@@ -142,11 +143,11 @@ export function verifyCitation(
   const rule = findRule(companyId, normalizedId);
   if (!rule) return foreignOrUnknownRule(companyId, normalizedId, "cited_rule_id");
 
-  // Defence in depth: any rule id the model mentions in its free-text citation must also
-  // belong to this company, so a decision cannot reason aloud from a neighbour's rule.
+  // Defence in depth: any rule id the model mentions in its prose must also belong to this
+  // company, so a decision cannot reason aloud from a neighbour's rule.
   const ownIds = new Set(ownPolicy.rules.map((r) => r.id));
-  for (const id of citedRule.match(RULE_ID_PATTERN) ?? []) {
-    if (!ownIds.has(id)) return foreignOrUnknownRule(companyId, id, "cited_rule mentioned");
+  for (const id of modelFreeText.match(RULE_ID_PATTERN) ?? []) {
+    if (!ownIds.has(id)) return foreignOrUnknownRule(companyId, id, "reason mentioned");
   }
 
   // Ids collide across tenants — every company here defines a MEAL-01 — so a matching id is
@@ -157,7 +158,7 @@ export function verifyCitation(
   // with canonical store text regardless, so foreign wording cannot reach a consumer. What
   // it still catches is the model having REASONED from the wrong tenant's policy, which is
   // worth rejecting rather than silently canonicalising.
-  const citedWords = normalize(citedRule);
+  const citedWords = normalize(modelFreeText);
   const ownText = ownTextFor(companyId, ownPolicy.rules);
   for (const foreign of foreignShinglesFor(companyId)) {
     if (!citedWords.includes(foreign.shingle)) continue;
@@ -168,7 +169,8 @@ export function verifyCitation(
       publicMessage:
         "The decision quoted policy text that is not part of this company's policy.",
       logDetail:
-        `cited_rule quoted "${foreign.shingle}" from ${foreign.company}'s ${foreign.ruleId}, ` +
+        `the decision's prose quoted "${foreign.shingle}" from ${foreign.company}'s ` +
+        `${foreign.ruleId}, ` +
         `which does not appear in "${companyId}"'s policy`,
     };
   }

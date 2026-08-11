@@ -7,14 +7,14 @@
 // agent through Eve's built-in session channel and never touches agent/channels/review.ts —
 // could not exercise any of it. The channel is now reduced to mapping the outcome onto
 // status codes, and evals call this directly.
-import { ExpenseDecisionSchema, type tExpenseDecision } from "./expense.schema.js";
+import { ExpenseDecisionSchema, type tFinalizedDecision } from "./expense.schema.js";
 import { formatRules } from "./policy-store.js";
 import { verifyCitation, type tCitationFailureCode } from "./verify-citation.js";
 
 export type tFinalizeFailureCode = "schema_mismatch" | tCitationFailureCode;
 
 export type tFinalizeResult =
-  | { ok: true; decision: tExpenseDecision }
+  | { ok: true; decision: tFinalizedDecision }
   | {
       ok: false;
       code: tFinalizeFailureCode;
@@ -40,7 +40,10 @@ export function finalizeDecision(companyId: string, raw: unknown): tFinalizeResu
     };
   }
 
-  const citation = verifyCitation(companyId, parsed.data.cited_rule_id, parsed.data.cited_rule);
+  // The free-text half of the check runs over `reason`, which is where the model's own
+  // prose now lives — it is the field that would carry a neighbour's rule text if the model
+  // had reasoned from the wrong tenant's policy.
+  const citation = verifyCitation(companyId, parsed.data.cited_rule_id, parsed.data.reason);
   if (!citation.ok) {
     return {
       ok: false,

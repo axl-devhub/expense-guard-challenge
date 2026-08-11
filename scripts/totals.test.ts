@@ -2,12 +2,12 @@
 // Run: bun run scripts/totals.test.ts   (pure, no model tokens)
 //
 // The gap this closes: the system prompt tells the model to "double-check that the receipt
-// totals add up", but nothing in the codebase ever summed line_items. The only tool offered
-// for the job, validate_expense, checks field PRESENCE — it returns {valid:true} for a
-// submission claiming 10x its own line items — and it checks the model's transcribed
-// arguments rather than the submission, so it can only confirm what the model just asserted.
+// totals add up", but nothing in the codebase ever summed line_items. The tool once
+// offered for the job, validate_expense, checked field PRESENCE — it returned
+// {valid:true} for a submission claiming 10x its own line items, and it checked the model's
+// transcribed arguments rather than the submission, so it could only confirm what the model
+// had just asserted. It has since been removed; scripts/tool-inputs.test.ts pins that.
 import assert from "node:assert/strict";
-import validateExpense from "../agent/tools/validate_expense.js";
 import { reconcileTotals } from "../agent/lib/totals.js";
 import type { tExpenseSubmission } from "../agent/lib/request-context.js";
 
@@ -43,15 +43,6 @@ function submission(over: Partial<tExpenseSubmission> = {}): tExpenseSubmission 
 }
 
 console.log("receipt totals — reconciliation");
-
-await check("the pre-existing validate_expense does NOT catch a 10x overclaim", async () => {
-  // Documents why a separate check is needed. This assertion is expected to keep passing:
-  // validate_expense does what it advertises (a presence check) and nothing more.
-  const out = (await (validateExpense as unknown as {
-    execute: (input: unknown) => Promise<{ valid: boolean }>;
-  }).execute({ company_id: "acme", category: "meals", claimed_amount: 960 }));
-  assert.equal(out.valid, true, "validate_expense unexpectedly rejected — update this note");
-});
 
 await check("a submission whose line items sum to the claim reconciles", () => {
   const result = reconcileTotals(submission());

@@ -13,9 +13,10 @@ function steps() {
   let x = "";
   x = x + "\n";
   x = x + "How to review a submission:\n";
-  x = x + "1. Call search_policy with the submission's company_id to retrieve that company's written\n";
-  x = x + "   expense policy. Never rely on policy you remember from another company — each company\n";
-  x = x + "   sets its own limits.\n";
+  x = x + "1. Call search_policy to retrieve the written expense policy for the company under\n";
+  x = x + "   review. It takes no company_id — the platform decides whose policy you get, and you\n";
+  x = x + "   cannot look up another company. Never rely on policy you remember from elsewhere:\n";
+  x = x + "   each company sets its own limits, and different companies reuse the same rule ids.\n";
   x = x + "2. Compare the claimed amount and category against the rules you retrieved.\n";
   x = x + "3. Call verify_totals. It reconciles the receipt's line items against the claimed\n";
   x = x + "   amount in code and returns the arithmetic as a fact — do not add the receipt up\n";
@@ -23,8 +24,7 @@ function steps() {
   x = x + "   receipt: treat that as a reason to reject or flag, whatever the policy limits say,\n";
   x = x + "   and quote the figures it returns in your reason. A \"no_line_items\" status means the\n";
   x = x + "   total could not be verified — judge the receipt text on its own merits and say so.\n";
-  x = x + "4. Check that the receipt is legible before you decide. You may also call\n";
-  x = x + "   validate_expense to sanity-check that the submission's core fields are present.\n";
+  x = x + "4. Check that the receipt is legible before you decide.\n";
   return x;
 }
 
@@ -41,8 +41,8 @@ function rubric() {
   r = r + "search_policy returned it (for example MEAL-01). It must be a rule from THIS\n";
   r = r + "submission's company — never one you remember from another company, and never an id\n";
   r = r + "you invent. If no retrieved rule fits, pick the closest one that genuinely applies and\n";
-  r = r + "explain the mismatch in reason. Put that rule's text in cited_rule, quoted as closely\n";
-  r = r + "as you can rather than paraphrased.\n";
+  r = r + "explain the mismatch in reason. You do not need to reproduce the rule's text — the\n";
+  r = r + "platform fills that in verbatim from the policy itself.\n";
   r = r + "In your reason, quote the specific receipt details that justify the decision so a\n";
   r = r + "reviewer can see the evidence you used, along with any limit you derived (for example\n";
   r = r + "a per-attendee cap multiplied by the number of attendees).";

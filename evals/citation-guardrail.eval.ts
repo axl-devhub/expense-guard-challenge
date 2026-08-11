@@ -39,9 +39,10 @@ export default defineEval({
         return;
       }
 
-      // The returned cited_rule must be a rule from THIS company, verbatim. Asserting on
-      // the text and not just the id matters: rule ids collide across tenants (all three
-      // companies define a MEAL-01), so an id-only assertion would pass on leaked data.
+      // The returned cited_rule is filled in server-side from the store, so it must be a
+      // rule from THIS company, verbatim. Asserting on text and not just the id matters:
+      // rule ids collide across tenants (all three companies define a MEAL-01), so an
+      // id-only assertion would pass on leaked data.
       const policy = getCompanyPolicy(submission.company_id);
       const cited = result.decision.cited_rule;
       if (!policy.rules.some((rule) => cited.includes(rule.text))) {

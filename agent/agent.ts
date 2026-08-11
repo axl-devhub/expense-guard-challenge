@@ -4,7 +4,7 @@
 //
 // Schema-output agent WITH tools: it emits the decision through `outputSchema`, and
 // drives to that decision by calling search_policy (fetch the company policy) and
-// validate_expense (sanity-check the submission). Eve binds `model` statically at build
+// verify_totals (reconcile the receipt arithmetic). Eve binds `model` statically at build
 // time — there is no runtime model override.
 import { defineAgent } from "eve";
 import { ExpenseDecisionSchema } from "./lib/expense.schema.js";

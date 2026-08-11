@@ -1,4 +1,7 @@
-// Tests for the fail-closed cited_rule guardrail.
+// Tests for the fail-closed citation guardrail.
+//
+// The third argument is the model's free prose about its decision — today the `reason`
+// field. It used to be `cited_rule`, before the model stopped emitting rule text at all.
 // Run: bun run scripts/verify-citation.test.ts
 //
 // Every "real output" string below was recorded from an actual run against the dev server,
