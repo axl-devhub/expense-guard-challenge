@@ -1,7 +1,7 @@
 # Findings
 
-Twenty commits on `axel-cuevas/expense-guard-test`. What I found, how I knew it was real, what
-I changed and why — plus what I left alone.
+Twenty-two commits on `axel-cuevas/expense-guard-test`. What I found, how I knew it was real,
+what I changed and why — plus what I left alone.
 
 One theme runs through most of it: **prefer making a bad state unrepresentable over detecting
 it**. A prompt instruction is a request; an absent parameter is a guarantee.
@@ -24,6 +24,20 @@ manifest showed one surviving channel. `bunx eve eval` posts to `/eve/v1/session
 shipped evals died in 87ms on a 404 before a single assertion ran. Renamed to `review.ts`.
 
 That second one matters more than it looks. The repo appeared to have a test suite. It did not.
+
+**And once it ran, it still could not see the guardrail.** The citation check lived inside the
+channel, and `bunx eve eval` drives the agent through Eve's *built-in* session channel — it
+never reaches that file. So every guardrail rule was unit-tested against hand-written strings
+and never once applied to a decision a real model produced. I only noticed because I went
+looking for which call sites the evals actually touch. Decision finalization moved to
+`agent/lib/finalize-decision.ts`, which the channel and the evals now both call; the channel is
+reduced to mapping the outcome onto status codes. That is the right home regardless of the test
+gap — "a decision must cite an own-company rule" is a property of a review, not of an HTTP
+response.
+
+A caution I had to apply to myself: for several commits I reported "eval suite passes" as
+evidence the guardrail was intact. It was not evidence of that. The evals were green and the
+guardrail was untested.
 
 ---
 
@@ -179,6 +193,43 @@ Also on cost: unknown tenants and malformed bodies are now rejected at ingress i
 zero tokens instead of after a full review, and `validate_expense` was deleted — with the
 submission schema enforced at ingress it could not return `valid:false` for anything reaching
 the model, while still costing tokens in the tool definitions on every request.
+
+---
+
+## 8. You could not tell what the agent had decided
+
+Not a planted bug — a gap I hit while trying to evidence the cost claims. `hooks/usage-log.ts`
+prints token usage per model step, but a step knows nothing about which company was reviewed or
+what was decided, so nothing could answer the question an expense system actually needs: who
+was told what, on which rule, and what did it cost.
+
+`logs/decisions.jsonl` now gets one append-only record per decision —
+`{ts, company_id, decision, cited_rule_id, model, inputTokens, outputTokens, cacheReadTokens,
+cacheWriteTokens}`. Written in the channel *after* the guardrail passes, because a rejected
+decision is a failure rather than an outcome and recording it as one would corrupt the trail.
+Token counts are summed across `step.completed`, since a review is several steps and the audit
+needs one number per decision.
+
+It never throws: a completed, guardrail-approved review should not become a 502 because a disk
+write failed. But a silently missing record is its own problem, so failures go loudly to
+stderr. If this ever becomes a compliance requirement rather than an operational one, invert
+that — the call site says so.
+
+## 9. Housekeeping worth naming
+
+`scripts/check.sh` drives every fixture through a running server and prints one line each; it
+was the only working feedback loop while the evals were dead. `bun run test` runs `tsc` plus
+every `scripts/*.test.ts` in one command, wired to GitHub Actions on push and pull request. I
+verified the gate fails in both directions — a deliberately broken suite dropped into
+`scripts/` exits 1 — because a green CI that cannot go red is not a gate.
+
+A quality pass over the branch (four review angles: reuse, simplification, efficiency,
+altitude) found one thing worth calling out beyond style: the ingress schema I had just added
+was being validated and then **thrown away**, with `buildRequestView` still doing
+`body as tExpenseSubmission`. The exact cast the schema existed to remove had survived the
+commit that added the schema. Parsing now produces the value that flows downstream, so the
+guarantee lives in the type rather than in the channel remembering to call two functions in
+order.
 
 ---
 
