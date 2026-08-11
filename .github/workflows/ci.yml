@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Deterministic checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Typecheck + every scripts/*.test.ts. See scripts/test-all.sh.
+      - name: Run the deterministic test suite
+        run: bun run test
+
+      # NOTE: `bunx eve eval` is deliberately NOT run here.
+      #
+      # The evals drive a real model through the Vercel AI Gateway. They require the
+      # AI_GATEWAY_API_KEY secret and they spend tokens on every single run, so wiring them
+      # to `on: push` would bill the account on every commit — including pushes from forks,
+      # which cannot read repository secrets and would fail regardless.
+      #
+      # They are also non-deterministic: two of the three assert on model behaviour and one
+      # is scored by an LLM judge, so a red build would not reliably mean a regression.
+      #
+      # Everything in scripts/*.test.ts is pure and deterministic by design, which is what
+      # makes it safe to gate on. Run the evals by hand before merging anything that touches
+      # the prompt, the decision schema, or the tools:
+      #
+      #     bunx eve eval

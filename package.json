@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "eve dev",
     "build": "eve build",
-    "eval": "eve eval"
+    "eval": "eve eval",
+    "test": "./scripts/test-all.sh"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.85",
