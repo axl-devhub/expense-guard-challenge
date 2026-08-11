@@ -61,17 +61,28 @@ function renderSubmission(submission: tExpenseSubmission, now: Date): string {
   return block;
 }
 
-// function oldRender(submission: tExpenseSubmission) {
-//   return "Review this: " + submission.company_id + " " + submission.category;
-// }
-
+// Static first, volatile last.
+//
+// Prompt caching keys on a shared prefix: everything from the first byte that differs
+// between two requests is uncacheable. This prompt used to open with the submission JSON
+// and an ISO timestamp — the two things that change on every single request — so the
+// identical instruction block that followed could never be reused, and every review re-billed
+// it in full.
+//
+// Ordering the stable instructions first makes that block a byte-identical prefix across all
+// requests, which is the precondition for caching. It does NOT by itself turn caching on:
+// that needs an explicit cache breakpoint from the provider/framework, and the per-step
+// figures from agent/hooks/usage-log.ts are the only honest way to confirm any of it landed.
+// This change makes the prompt cache-READY; it does not claim a measured saving.
+//
+// Structural invariant, asserted in scripts/prompt-structure.test.ts: two prompts that differ
+// only in their submission must share the whole instruction block as a common prefix.
 export function buildSystemPrompt(submission: tExpenseSubmission, now: Date): string {
-  const volatile = renderSubmission(submission, now);
   let prompt = "";
-  prompt = prompt + volatile;
-  prompt = prompt + "\n\n";
   prompt = prompt + header();
   prompt = prompt + steps();
   prompt = prompt + rubric();
+  prompt = prompt + "\n\n";
+  prompt = prompt + renderSubmission(submission, now);
   return prompt;
 }
