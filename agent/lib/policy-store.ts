@@ -23,26 +23,34 @@ export function getCompanyPolicy(companyId: string): tCompanyPolicy {
   return resolved;
 }
 
+// Narrow a policy to the rules relevant to `topic`, ALWAYS keeping the rules that apply
+// regardless of category.
+//
+// The previous version returned only substring matches and fell back to the full ruleset
+// only on zero hits, so a precise topic returned strictly less than a nonsense one:
+//
+//   searchPolicy("initech", "office")       -> OFF-01 only
+//   searchPolicy("initech", "office chair") -> all four rules
+//
+// That silently hid initech's GEN-01 (every expense over $100 needs manager review) and
+// CASH-01 (cash receipts are not reimbursable) from any category-shaped topic — the
+// company's only blanket gate and its only hard reject. The model was never told rules had
+// been withheld, so it decided against a policy it could not see was incomplete.
 function selectRules(policy: tCompanyPolicy, topic: string | undefined): tPolicyRule[] {
   if (!topic) return policy.rules;
+
   const q = topic.toLowerCase();
-  const hits: tPolicyRule[] = [];
-  for (let i = 0; i < policy.rules.length; i = i + 1) {
-    const r = policy.rules[i];
-    if (!r) continue;
-    if (r.category.toLowerCase().indexOf(q) >= 0) {
-      hits.push(r);
-      continue;
-    }
-    if (r.text.toLowerCase().indexOf(q) >= 0) {
-      hits.push(r);
-      continue;
-    }
-  }
-  // const hits2 = policy.rules.filter((x) => x.text.toLowerCase().includes(q));
-  // if (hits2.length > 0) return hits2;
-  if (hits.length === 0) return policy.rules;
-  return hits;
+  const selected = policy.rules.filter(
+    (rule) =>
+      rule.scope === "global" ||
+      rule.category.toLowerCase().includes(q) ||
+      rule.text.toLowerCase().includes(q),
+  );
+
+  // A topic that matches nothing is a bad query, not evidence that the policy is empty —
+  // return everything rather than deciding on global rules alone.
+  const topicMatched = selected.some((rule) => rule.scope !== "global");
+  return topicMatched ? selected : policy.rules;
 }
 
 // Look up a single rule within one company's policy. Used by the citation guardrail to
