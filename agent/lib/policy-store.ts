@@ -40,17 +40,17 @@ function selectRules(policy: tCompanyPolicy, topic: string | undefined): tPolicy
   if (!topic) return policy.rules;
 
   const q = topic.toLowerCase();
-  const selected = policy.rules.filter(
-    (rule) =>
-      rule.scope === "global" ||
-      rule.category.toLowerCase().includes(q) ||
-      rule.text.toLowerCase().includes(q),
-  );
+  const matchesTopic = (rule: tPolicyRule): boolean =>
+    rule.category.toLowerCase().includes(q) || rule.text.toLowerCase().includes(q);
 
   // A topic that matches nothing is a bad query, not evidence that the policy is empty —
-  // return everything rather than deciding on global rules alone.
-  const topicMatched = selected.some((rule) => rule.scope !== "global");
-  return topicMatched ? selected : policy.rules;
+  // return everything rather than deciding on global rules alone. Ask the predicate
+  // directly: inferring "did the topic match?" from the filtered output (via `scope`, as a
+  // proxy for "got in on merit") misreads a topic whose only hit is itself a global rule,
+  // and silently turns narrowing off.
+  if (!policy.rules.some(matchesTopic)) return policy.rules;
+
+  return policy.rules.filter((rule) => rule.scope === "global" || matchesTopic(rule));
 }
 
 // Look up a single rule within one company's policy. Used by the citation guardrail to

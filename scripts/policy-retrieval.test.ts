@@ -93,6 +93,22 @@ check("narrowing still excludes unrelated category-scoped rules", () => {
   assert.ok(!rules.includes("TRVL-01"), "an unrelated category-scoped rule was returned");
 });
 
+// Regression: `topicMatched` used to be derived from the OUTPUT array via
+// `selected.some(r => r.scope !== "global")`, using scope as a proxy for "this one got in
+// on merit". A topic whose only match happens to be a global rule then read as "nothing
+// matched" and returned the entire policy — narrowing silently switched itself off.
+check("a topic matching only a global rule still narrows", () => {
+  // ALC-01 is acme's only rule matching "alcohol", and it is scope:"global".
+  const { rules } = searchPolicy("acme", "alcohol");
+  const lines = rules.split("\n");
+  assert.ok(rules.includes("ALC-01"), "the matching rule is missing");
+  assert.equal(
+    lines.length,
+    1,
+    `expected narrowing to 1 rule, got ${lines.length} — narrowing collapsed to the full policy`,
+  );
+});
+
 check("every rule marked global is reachable from any topic, for every company", () => {
   for (const policy of Object.values(POLICIES)) {
     const globals = policy.rules.filter((r) => r.scope === "global");
