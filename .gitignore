@@ -3,5 +3,6 @@ node_modules/
 .eve/
 .workflow-data/
 .claude/
+logs/
 .env
 *.log

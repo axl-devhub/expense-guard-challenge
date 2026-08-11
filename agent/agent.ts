@@ -8,9 +8,10 @@
 // time — there is no runtime model override.
 import { defineAgent } from "eve";
 import { ExpenseDecisionSchema } from "./lib/expense.schema.js";
+import { AGENT_MODEL } from "./lib/model.js";
 
 export default defineAgent({
-  model: "anthropic/claude-haiku-4.5",
+  model: AGENT_MODEL,
   // Dated Anthropic ids aren't in the Gateway model catalog, so pin the window to skip
   // the lookup diagnostic.
   modelContextWindowTokens: 200_000,

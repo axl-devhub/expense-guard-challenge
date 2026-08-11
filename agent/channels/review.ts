@@ -11,6 +11,8 @@ import {
 } from "../lib/request-context.js";
 import { hasCompanyPolicy } from "../lib/policy-store.js";
 import { finalizeDecision } from "../lib/finalize-decision.js";
+import { appendDecisionRecord } from "../lib/decision-log.js";
+import { AGENT_MODEL } from "../lib/model.js";
 
 type tJsonOutputSchema = NonNullable<SendPayload["outputSchema"]>;
 
@@ -23,20 +25,47 @@ function toJsonSchema(schema: z.ZodType): tJsonOutputSchema {
 
 type tStreamEvent = {
   type: string;
-  data?: { result?: unknown; message?: string; code?: string };
+  data?: {
+    result?: unknown;
+    message?: string;
+    code?: string;
+    usage?: {
+      readonly inputTokens?: number;
+      readonly outputTokens?: number;
+      readonly cacheReadTokens?: number;
+      readonly cacheWriteTokens?: number;
+    };
+  };
 };
 
-// Drain the turn's event stream once, capturing the structured result / terminal failure.
-async function drainDecision(session: Session): Promise<{ result: unknown; failure: string | null }> {
+type tDrainedTurn = {
+  result: unknown;
+  failure: string | null;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+// Drain the turn's event stream once, capturing the structured result / terminal failure,
+// and summing per-step token usage along the way. A review is several model steps, so the
+// cost of a decision is the sum over `step.completed` — the same fields
+// agent/hooks/usage-log.ts prints per step, totalled here because the audit record needs
+// one number per decision rather than one per step.
+async function drainDecision(session: Session): Promise<tDrainedTurn> {
   const stream = await session.getEventStream();
   const reader = stream.getReader();
   let result: unknown;
   let failure: string | null = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       const event = value as tStreamEvent;
+      if (event.type === "step.completed") {
+        inputTokens = inputTokens + (event.data?.usage?.inputTokens ?? 0);
+        outputTokens = outputTokens + (event.data?.usage?.outputTokens ?? 0);
+      }
       if (event.type === "result.completed") result = event.data?.result;
       if (event.type === "turn.completed") break;
       if (event.type === "turn.failed") {
@@ -47,7 +76,7 @@ async function drainDecision(session: Session): Promise<{ result: unknown; failu
   } finally {
     reader.releaseLock();
   }
-  return { result, failure };
+  return { result, failure, inputTokens, outputTokens };
 }
 
 const outputSchema = toJsonSchema(ExpenseDecisionSchema);
@@ -106,7 +135,7 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         { auth: null, continuationToken: `eve:${crypto.randomUUID()}`, state: view },
       );
 
-      const { result, failure } = await drainDecision(session);
+      const { result, failure, inputTokens, outputTokens } = await drainDecision(session);
       if (failure) {
         return Response.json({ ok: false, error: `turn failed: ${failure}` }, { status: 502 });
       }
@@ -128,6 +157,18 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
           { status: 502 },
         );
       }
+
+      // Audit trail — only for decisions that passed the guardrail. A rejected decision is
+      // a failure, not an outcome, and recording it as one would corrupt the trail.
+      await appendDecisionRecord({
+        ts: new Date().toISOString(),
+        company_id: submission.company_id,
+        decision: finalized.decision.decision,
+        cited_rule_id: finalized.decision.cited_rule_id,
+        model: AGENT_MODEL,
+        inputTokens,
+        outputTokens,
+      });
 
       return Response.json({ ok: true, data: finalized.decision }, { status: 200 });
     }),
