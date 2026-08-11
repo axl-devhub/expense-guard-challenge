@@ -7,12 +7,14 @@
 // can only ever confirm what the caller already claimed.
 import { defineTool } from "eve/tools";
 import { z } from "zod";
+import { checkCurrency } from "../lib/currency.js";
 import { reconcileTotals } from "../lib/totals.js";
 import { submissionState } from "../lib/request-context.js";
 
 export default defineTool({
   description:
-    "Check whether the receipt's line items add up to the claimed amount. Takes no " +
+    "Check whether the receipt's line items add up to the claimed amount, and whether the " +
+    "claim is even in the same currency as the policy limits. Takes no " +
     "arguments — it reads the submission under review directly. Call this before deciding: " +
     "it returns the arithmetic as a fact so you do not have to add up the receipt yourself. " +
     "A 'mismatch' status means the claim is not supported by the itemised receipt.",
@@ -29,6 +31,9 @@ export default defineTool({
           "not be reconciled. Do not treat this as the totals being correct.",
       };
     }
-    return reconcileTotals(submission);
+    // Line items and the claim are always in the same currency, so the arithmetic is
+    // currency-agnostic and stays meaningful either way. What is NOT meaningful is
+    // comparing the resulting number to a USD policy limit, which is what `currency` says.
+    return { ...reconcileTotals(submission), currency: checkCurrency(submission) };
   },
 });

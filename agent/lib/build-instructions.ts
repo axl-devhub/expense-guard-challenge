@@ -24,6 +24,10 @@ function steps() {
   x = x + "   receipt: treat that as a reason to reject or flag, whatever the policy limits say,\n";
   x = x + "   and quote the figures it returns in your reason. A \"no_line_items\" status means the\n";
   x = x + "   total could not be verified — judge the receipt text on its own merits and say so.\n";
+  x = x + "   verify_totals also reports whether the claim is in the same currency as the policy\n";
+  x = x + "   limits. If it reports comparable:false, the amount CANNOT be measured against any\n";
+  x = x + "   limit — do not convert it, do not guess a rate, and do not treat the number as if\n";
+  x = x + "   it were dollars. Return flag_for_review and say the amount needs converting.\n";
   x = x + "4. Check that the receipt is legible before you decide.\n";
   return x;
 }

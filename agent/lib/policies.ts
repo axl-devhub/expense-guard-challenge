@@ -1,5 +1,11 @@
 // Synthetic per-company expense policies. Each company sets its own limits, so a
 // submission must always be judged against its OWN company's rules.
+
+// Every limit below is written with a bare "$" and means USD. Stating that here rather than
+// leaving it implicit is what lets agent/lib/currency.ts decide whether a submitted amount
+// is comparable to these numbers at all. If policies ever become per-company multi-currency,
+// this constant becomes a field on tCompanyPolicy and the check follows it.
+export const POLICY_CURRENCY = "USD";
 export type tPolicyRule = {
   id: string;
   category: string;

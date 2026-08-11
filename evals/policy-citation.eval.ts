@@ -23,7 +23,7 @@ export default defineEval({
 
     t.didNotFail();
 
-    const finalized = finalizeDecision(submission.company_id, turn.data);
+    const finalized = finalizeDecision(submission, turn.data);
     const rendered = finalized.ok
       ? `Decision: ${finalized.decision.decision}\n` +
         `Reason: ${finalized.decision.reason}\n` +

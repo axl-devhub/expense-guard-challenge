@@ -7,8 +7,10 @@
 // agent through Eve's built-in session channel and never touches agent/channels/review.ts —
 // could not exercise any of it. The channel is now reduced to mapping the outcome onto
 // status codes, and evals call this directly.
+import { checkCurrency } from "./currency.js";
 import { ExpenseDecisionSchema, type tFinalizedDecision } from "./expense.schema.js";
 import { formatRules } from "./policy-store.js";
+import type { tExpenseSubmission } from "./request-context.js";
 import { verifyCitation, type tCitationFailureCode } from "./verify-citation.js";
 
 export type tFinalizeFailureCode = "schema_mismatch" | tCitationFailureCode;
@@ -24,7 +26,11 @@ export type tFinalizeResult =
       logDetail: string;
     };
 
-export function finalizeDecision(companyId: string, raw: unknown): tFinalizeResult {
+export function finalizeDecision(
+  submission: tExpenseSubmission,
+  raw: unknown,
+): tFinalizeResult {
+  const companyId = submission.company_id;
   const parsed = ExpenseDecisionSchema.safeParse(raw);
   if (!parsed.success) {
     return {
@@ -57,12 +63,34 @@ export function finalizeDecision(companyId: string, raw: unknown): tFinalizeResu
   // it. The id was verified against this company's policy above, so an invented or
   // paraphrased rule text cannot reach the caller — the model's own wording stays in
   // `reason`, where it belongs.
-  return {
-    ok: true,
-    decision: {
-      ...parsed.data,
-      cited_rule_id: citation.rule.id,
-      cited_rule: formatRules([citation.rule]),
-    },
+  const decision: tFinalizedDecision = {
+    ...parsed.data,
+    cited_rule_id: citation.rule.id,
+    cited_rule: formatRules([citation.rule]),
   };
+
+  // Currency gate. Policy limits are USD; a claim in another currency cannot be measured
+  // against them without an exchange rate this system does not have. Rather than let the
+  // model apply an invented rate — observed live, it treated $50 as 50 MXN and rejected a
+  // valid claim — force the review to a human.
+  //
+  // This overrides BOTH approve and reject, deliberately. A reject is normally the
+  // conservative outcome, but a reject reached by comparing pesos to dollars is just as
+  // wrong as an approve, and it silently refuses money someone is owed. The cost of
+  // over-flagging is a human glance; the cost of either wrong answer is real.
+  const currency = checkCurrency(submission);
+  if (!currency.comparable && decision.decision !== "flag_for_review") {
+    return {
+      ok: true,
+      decision: {
+        ...decision,
+        decision: "flag_for_review",
+        reason:
+          `${decision.reason}\n\n[Platform] Escalated from "${decision.decision}": ` +
+          currency.summary,
+      },
+    };
+  }
+
+  return { ok: true, decision };
 }

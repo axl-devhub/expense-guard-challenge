@@ -153,7 +153,7 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
       // them too — the eval harness drives the agent through Eve's built-in session
       // channel and never reaches this file. The company comes from the submission
       // resolved at ingress, never from anything the model produced.
-      const finalized = finalizeDecision(submission.company_id, result);
+      const finalized = finalizeDecision(submission, result);
       if (!finalized.ok) {
         console.error("[expense-guard] REJECTED decision", {
           company_id: submission.company_id,

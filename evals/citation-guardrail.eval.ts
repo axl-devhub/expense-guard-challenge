@@ -30,7 +30,7 @@ export default defineEval({
     t.calledTool("search_policy").gate();
 
     const SurvivesFinalization = z.unknown().superRefine((raw, ctx) => {
-      const result = finalizeDecision(submission.company_id, raw);
+      const result = finalizeDecision(submission, raw);
       if (!result.ok) {
         ctx.addIssue({
           code: "custom",

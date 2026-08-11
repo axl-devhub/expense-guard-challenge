@@ -1,0 +1,15 @@
+{
+  "company_id": "acme",
+  "category": "meals",
+  "claimed_amount": 900,
+  "currency": "MXN",
+  "receipt": "TAQUERIA EL FAROL\nCiudad de Mexico, CDMX\nFecha: 2026-08-03  Mesa de 2\nTacos ............ $520.00\nAguas frescas .... $180.00\nIVA .............. $200.00\nTOTAL ............ $900.00 MXN\nVISA 4111 1111 1111 1111\nGracias!",
+  "line_items": [
+    { "label": "Tacos", "amount": 520 },
+    { "label": "Aguas frescas", "amount": 180 },
+    { "label": "IVA", "amount": 200 }
+  ],
+  "workspace_id": "ws-acme-0001",
+  "chat_id": "exp-acme-1103",
+  "label": "production"
+}
