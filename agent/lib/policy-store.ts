@@ -1,14 +1,15 @@
 // Loads and searches a company's expense policy for the search_policy tool.
 import { POLICIES, type tCompanyPolicy, type tPolicyRule } from "./policies.js";
 
-// Memoized so repeated policy lookups within a review are cheap.
-let activePolicy: tCompanyPolicy | null = null;
-
+// Deliberately not memoized. POLICIES is an in-memory object literal, so a lookup is
+// already O(1) and a cache buys nothing measurable — but held in module scope it outlives
+// the request that filled it. The previous version cached the first company looked up and
+// returned it for every subsequent lookup in the process, serving one tenant's policy into
+// another tenant's review. Any cache added here must be keyed by companyId and scoped to
+// the request. See scripts/policy-isolation.test.ts.
 export function getCompanyPolicy(companyId: string): tCompanyPolicy {
-  if (activePolicy) return activePolicy;
   const resolved = POLICIES[companyId] ?? POLICIES.acme;
   if (!resolved) throw new Error("No default expense policy is configured.");
-  activePolicy = resolved;
   return resolved;
 }
 
