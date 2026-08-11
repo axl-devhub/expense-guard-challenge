@@ -17,6 +17,12 @@ export type tDecisionAuditRecord = {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  // Recorded even though they are currently always 0: the prompt was reordered to be
+  // cache-ready, but no cache breakpoint is set yet, so nothing is being cached. Having the
+  // columns in the trail from the start means the day a breakpoint is added, the before/after
+  // is already in the data rather than needing a separate measurement exercise.
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 // Overridable so tests can write somewhere disposable.

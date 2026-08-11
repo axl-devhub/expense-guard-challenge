@@ -43,6 +43,8 @@ type tDrainedTurn = {
   failure: string | null;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 // Drain the turn's event stream once, capturing the structured result / terminal failure,
@@ -57,14 +59,19 @@ async function drainDecision(session: Session): Promise<tDrainedTurn> {
   let failure: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       const event = value as tStreamEvent;
       if (event.type === "step.completed") {
-        inputTokens = inputTokens + (event.data?.usage?.inputTokens ?? 0);
-        outputTokens = outputTokens + (event.data?.usage?.outputTokens ?? 0);
+        const usage = event.data?.usage;
+        inputTokens = inputTokens + (usage?.inputTokens ?? 0);
+        outputTokens = outputTokens + (usage?.outputTokens ?? 0);
+        cacheReadTokens = cacheReadTokens + (usage?.cacheReadTokens ?? 0);
+        cacheWriteTokens = cacheWriteTokens + (usage?.cacheWriteTokens ?? 0);
       }
       if (event.type === "result.completed") result = event.data?.result;
       if (event.type === "turn.completed") break;
@@ -76,7 +83,7 @@ async function drainDecision(session: Session): Promise<tDrainedTurn> {
   } finally {
     reader.releaseLock();
   }
-  return { result, failure, inputTokens, outputTokens };
+  return { result, failure, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
 }
 
 const outputSchema = toJsonSchema(ExpenseDecisionSchema);
@@ -135,7 +142,8 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         { auth: null, continuationToken: `eve:${crypto.randomUUID()}`, state: view },
       );
 
-      const { result, failure, inputTokens, outputTokens } = await drainDecision(session);
+      const { result, failure, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } =
+        await drainDecision(session);
       if (failure) {
         return Response.json({ ok: false, error: `turn failed: ${failure}` }, { status: 502 });
       }
@@ -168,6 +176,8 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         model: AGENT_MODEL,
         inputTokens,
         outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
       });
 
       return Response.json({ ok: true, data: finalized.decision }, { status: 200 });

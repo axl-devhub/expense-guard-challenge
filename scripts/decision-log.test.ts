@@ -39,6 +39,8 @@ function record(over: Record<string, unknown> = {}) {
     model: "anthropic/claude-haiku-4.5",
     inputTokens: 1891,
     outputTokens: 175,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     ...over,
   };
 }
@@ -79,11 +81,15 @@ await check("every field the audit needs is present and correctly typed", async 
     "model",
     "inputTokens",
     "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
   ]) {
     assert.ok(field in parsed, `record is missing "${field}"`);
   }
   assert.equal(typeof parsed.inputTokens, "number");
   assert.equal(typeof parsed.outputTokens, "number");
+  assert.equal(typeof parsed.cacheReadTokens, "number");
+  assert.equal(typeof parsed.cacheWriteTokens, "number");
   assert.equal(parsed.company_id, "initech");
   assert.equal(parsed.decision, "reject");
   assert.match(String(parsed.ts), /^\d{4}-\d{2}-\d{2}T/);
