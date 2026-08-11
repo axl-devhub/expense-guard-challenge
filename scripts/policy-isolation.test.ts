@@ -18,7 +18,7 @@ function check(name: string, fn: () => void): void {
     console.log(`  ok   ${name}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    failures.push(`${name}: ${message}`);
+    failures.push(name);
     console.log(`  FAIL ${name}\n       ${message.split("\n").join("\n       ")}`);
   }
 }

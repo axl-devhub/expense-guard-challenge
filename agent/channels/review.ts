@@ -5,9 +5,8 @@ import { z } from "zod";
 import { defineChannel, POST, type Session, type SendPayload } from "eve/channels";
 import { ExpenseDecisionSchema } from "../lib/expense.schema.js";
 import {
-  buildRequestView,
-  resolveExpenseSubmission,
-  validateRequestBody,
+  loadExpenseFixture,
+  parseRequestBody,
   type tRequestView,
 } from "../lib/request-context.js";
 import { hasCompanyPolicy } from "../lib/policy-store.js";
@@ -72,27 +71,32 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
       // Ingress guardrail — runs before the turn is opened, so a malformed submission or
       // an unknown tenant costs zero model tokens. A bare body is not rejected here: that
       // is the documented dev/eval path to the fixture.
-      const shape = validateRequestBody(body);
-      if (!shape.ok) {
+      const parsedBody = parseRequestBody(body);
+      if (!parsedBody.ok) {
         return Response.json(
-          { ok: false, error: "Invalid expense submission.", problems: shape.problems },
+          { ok: false, error: "Invalid expense submission.", problems: parsedBody.problems },
           { status: 400 },
         );
       }
 
-      const view = buildRequestView(body);
+      const view = parsedBody.view;
 
-      if (view.request && !hasCompanyPolicy(view.request.company_id)) {
+      // Resolve the tenant ONCE, here, and use that single value for both the ingress gate
+      // and the post-turn citation check. Deriving it twice made the isolation invariant
+      // "the two derivations agree" rather than "there is one".
+      const submission = view.request ?? loadExpenseFixture();
+
+      if (!hasCompanyPolicy(submission.company_id)) {
         // A caller error, not an agent failure — 400, and cheap. Before this check an
         // unknown company_id was silently adjudicated against Acme's rules; after the
         // policy-store fix it failed, but only after paying for a whole review.
         console.warn("[expense-guard] rejected unknown company_id at ingress", {
-          company_id: view.request.company_id,
+          company_id: submission.company_id,
         });
         return Response.json(
           {
             ok: false,
-            error: `No expense policy is configured for company_id "${view.request.company_id}".`,
+            error: `No expense policy is configured for company_id "${submission.company_id}".`,
           },
           { status: 400 },
         );
@@ -110,25 +114,12 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
       // Schema validation, the fail-closed citation guardrail, and canonicalisation of
       // cited_rule all live in lib/finalize-decision.ts so `bunx eve eval` can exercise
       // them too — the eval harness drives the agent through Eve's built-in session
-      // channel and never reaches this file. The company is taken from the request, never
-      // from anything the model produced.
-      let companyId: string;
-      try {
-        companyId = resolveExpenseSubmission(view).company_id;
-      } catch (error) {
-        console.error("[expense-guard] could not resolve the submission for the citation check", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return Response.json(
-          { ok: false, error: "Could not resolve the submission under review." },
-          { status: 502 },
-        );
-      }
-
-      const finalized = finalizeDecision(companyId, result);
+      // channel and never reaches this file. The company comes from the submission
+      // resolved at ingress, never from anything the model produced.
+      const finalized = finalizeDecision(submission.company_id, result);
       if (!finalized.ok) {
         console.error("[expense-guard] REJECTED decision", {
-          company_id: companyId,
+          company_id: submission.company_id,
           code: finalized.code,
           detail: finalized.logDetail,
         });

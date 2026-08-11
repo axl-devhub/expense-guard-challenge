@@ -30,25 +30,9 @@ export const ExpenseSubmissionSchema = z.object({
 export type tExpenseLineItem = z.infer<typeof ExpenseLineItemSchema>;
 export type tExpenseSubmission = z.infer<typeof ExpenseSubmissionSchema>;
 
-export type tBodyValidation = { ok: true } | { ok: false; problems: string[] };
-
-// Ingress check, run by the channel BEFORE a turn is opened, so a malformed submission
-// costs zero model tokens. A bare body is not an error — it is the documented dev/eval
-// path to the fixture — so only a non-empty object is validated here.
-export function validateRequestBody(body: unknown): tBodyValidation {
-  if (!isPlainObject(body) || Object.keys(body).length === 0) return { ok: true };
-
-  const parsed = ExpenseSubmissionSchema.safeParse(body);
-  if (parsed.success) return { ok: true };
-
-  return {
-    ok: false,
-    problems: parsed.error.issues.map((issue) => {
-      const path = issue.path.join(".");
-      return path ? `${path}: ${issue.message}` : issue.message;
-    }),
-  };
-}
+export type tParsedRequestBody =
+  | { ok: true; view: tRequestView }
+  | { ok: false; problems: string[] };
 
 // The per-session projection carried by channel state -> metadata(state). `contextProvided`
 // tells "bare request, use fixture" apart from "a body was sent but did not survive the
@@ -68,14 +52,37 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// WRITE side — the channel builds the state to seed from the parsed body. A bare body
-// (missing/empty/non-object) -> fixture path (contextProvided:false). A non-empty object
-// body IS the submission (contextProvided:true).
-export function buildRequestView(body: unknown): tRequestView {
-  if (isPlainObject(body) && Object.keys(body).length > 0) {
-    return { request: body as tExpenseSubmission, contextProvided: true };
+// Is this body a submission attempt at all? A bare body (missing/empty/non-object) is not
+// an error — it is the documented dev/eval path to the fixture. Written once because the
+// two readings must stay in lockstep: if the "validate it" test and the "treat it as a
+// submission" test ever disagree, a body gets approved and then silently discarded to the
+// fixture, reviewing the wrong company — the exact failure `contextProvided` exists to
+// prevent.
+function isSubmissionBody(body: unknown): body is Record<string, unknown> {
+  return isPlainObject(body) && Object.keys(body).length > 0;
+}
+
+// WRITE side — parse the body into the state the channel seeds. Parse, don't validate: the
+// `request` on the ok branch IS the schema's output, so nothing downstream is working from
+// an unchecked `as tExpenseSubmission` cast. Run by the channel BEFORE a turn is opened, so
+// a malformed submission costs zero model tokens.
+export function parseRequestBody(body: unknown): tParsedRequestBody {
+  if (!isSubmissionBody(body)) {
+    return { ok: true, view: { request: null, contextProvided: false } };
   }
-  return { request: null, contextProvided: false };
+
+  const parsed = ExpenseSubmissionSchema.safeParse(body);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      problems: parsed.error.issues.map((issue) => {
+        const path = issue.path.join(".");
+        return path ? `${path}: ${issue.message}` : issue.message;
+      }),
+    };
+  }
+
+  return { ok: true, view: { request: parsed.data, contextProvided: true } };
 }
 
 // READ side — loud fallback: a body was provided but did not reach the resolver via the

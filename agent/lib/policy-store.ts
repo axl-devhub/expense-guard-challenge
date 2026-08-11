@@ -53,6 +53,25 @@ function selectRules(policy: tCompanyPolicy, topic: string | undefined): tPolicy
   return policy.rules.filter((rule) => rule.scope === "global" || matchesTopic(rule));
 }
 
+// Which OTHER companies define this rule id? Lives here so policy-store stays the only
+// module that reads the raw multi-tenant POLICIES map — the place a real backing store
+// would have to land.
+export function ownersOfRuleId(ruleId: string, excluding: string): string[] {
+  const wanted = ruleId.trim().toUpperCase();
+  return Object.values(POLICIES)
+    .filter(
+      (policy) =>
+        policy.company_id !== excluding &&
+        policy.rules.some((rule) => rule.id.toUpperCase() === wanted),
+    )
+    .map((policy) => policy.company_id);
+}
+
+// Every company's rules except this one's, for cross-tenant checks.
+export function otherPolicies(companyId: string): tCompanyPolicy[] {
+  return Object.values(POLICIES).filter((policy) => policy.company_id !== companyId);
+}
+
 // Look up a single rule within one company's policy. Used by the citation guardrail to
 // resolve a decision's cited_rule_id to its verbatim text.
 export function findRule(companyId: string, ruleId: string): tPolicyRule | undefined {

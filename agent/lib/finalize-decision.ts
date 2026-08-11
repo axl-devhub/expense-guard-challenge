@@ -8,6 +8,7 @@
 // could not exercise any of it. The channel is now reduced to mapping the outcome onto
 // status codes, and evals call this directly.
 import { ExpenseDecisionSchema, type tExpenseDecision } from "./expense.schema.js";
+import { formatRules } from "./policy-store.js";
 import { verifyCitation, type tCitationFailureCode } from "./verify-citation.js";
 
 export type tFinalizeFailureCode = "schema_mismatch" | tCitationFailureCode;
@@ -58,7 +59,7 @@ export function finalizeDecision(companyId: string, raw: unknown): tFinalizeResu
     decision: {
       ...parsed.data,
       cited_rule_id: citation.rule.id,
-      cited_rule: `[${citation.rule.id}] (${citation.rule.category}) ${citation.rule.text}`,
+      cited_rule: formatRules([citation.rule]),
     },
   };
 }
