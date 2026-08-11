@@ -4,7 +4,12 @@
 import { z } from "zod";
 import { defineChannel, POST, type Session, type SendPayload } from "eve/channels";
 import { ExpenseDecisionSchema } from "../lib/expense.schema.js";
-import { buildRequestView, type tRequestView } from "../lib/request-context.js";
+import {
+  buildRequestView,
+  resolveExpenseSubmission,
+  type tRequestView,
+} from "../lib/request-context.js";
+import { verifyCitation } from "../lib/verify-citation.js";
 
 type tJsonOutputSchema = NonNullable<SendPayload["outputSchema"]>;
 
@@ -77,6 +82,39 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
       if (!parsed.success) {
         return Response.json(
           { ok: false, error: "Agent output did not match the decision schema." },
+          { status: 502 },
+        );
+      }
+
+      // Fail-closed citation guardrail. The model writes `cited_rule` as free text and
+      // nothing upstream ties it to the rules search_policy actually returned, so verify
+      // server-side that the cited rule belongs to this submission's company. The company
+      // is taken from the request (via the same resolver the prompt was built from), never
+      // from anything the model produced.
+      let companyId: string;
+      try {
+        companyId = resolveExpenseSubmission(view).company_id;
+      } catch (error) {
+        console.error("[expense-guard] could not resolve the submission for the citation check", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return Response.json(
+          { ok: false, error: "Could not resolve the submission under review." },
+          { status: 502 },
+        );
+      }
+
+      const citation = verifyCitation(companyId, parsed.data.cited_rule);
+      if (!citation.ok) {
+        console.error("[expense-guard] REJECTED decision — citation check failed", {
+          company_id: companyId,
+          code: citation.code,
+          detail: citation.logDetail,
+          decision: parsed.data.decision,
+          cited_rule: parsed.data.cited_rule,
+        });
+        return Response.json(
+          { ok: false, error: `Decision rejected: ${citation.publicMessage}` },
           { status: 502 },
         );
       }
