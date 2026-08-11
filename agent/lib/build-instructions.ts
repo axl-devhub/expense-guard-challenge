@@ -17,8 +17,14 @@ function steps() {
   x = x + "   expense policy. Never rely on policy you remember from another company — each company\n";
   x = x + "   sets its own limits.\n";
   x = x + "2. Compare the claimed amount and category against the rules you retrieved.\n";
-  x = x + "3. Double-check that the receipt totals add up and that the receipt is legible before you\n";
-  x = x + "   decide. You may call validate_expense to sanity-check the submission's fields.\n";
+  x = x + "3. Call verify_totals. It reconciles the receipt's line items against the claimed\n";
+  x = x + "   amount in code and returns the arithmetic as a fact — do not add the receipt up\n";
+  x = x + "   yourself. A \"mismatch\" status means the claim is not supported by the itemised\n";
+  x = x + "   receipt: treat that as a reason to reject or flag, whatever the policy limits say,\n";
+  x = x + "   and quote the figures it returns in your reason. A \"no_line_items\" status means the\n";
+  x = x + "   total could not be verified — judge the receipt text on its own merits and say so.\n";
+  x = x + "4. Check that the receipt is legible before you decide. You may also call\n";
+  x = x + "   validate_expense to sanity-check that the submission's core fields are present.\n";
   return x;
 }
 

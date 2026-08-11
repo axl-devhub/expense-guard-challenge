@@ -1,0 +1,15 @@
+{
+  "company_id": "acme",
+  "category": "meals",
+  "claimed_amount": 148,
+  "currency": "USD",
+  "receipt": "OLIVE & VINE BISTRO\n123 Market St, San Francisco, CA\nDate: 2026-08-02  Table of 2\nEntrees .......... $72.00\nSodas & juice .... $12.00\nSales tax ........ $12.00\nTOTAL ............ $96.00\nPaid with VISA 4111 1111 1111 1111\nThank you!",
+  "line_items": [
+    { "label": "Entrees", "amount": 72 },
+    { "label": "Sodas & juice", "amount": 12 },
+    { "label": "Sales tax", "amount": 12 }
+  ],
+  "workspace_id": "ws-acme-0001",
+  "chat_id": "exp-acme-1099",
+  "label": "production"
+}
