@@ -1,321 +1,246 @@
 # Findings
 
-Running document. Updated as fixes land, not written at the end.
+Twenty commits on `axel-cuevas/expense-guard-test`. What I found, how I knew it was real, what
+I changed and why — plus what I left alone.
 
-Environment note: the shipped model pin `anthropic/claude-opus-4-1-20250805` returns 404
-from the Vercel AI Gateway (`GatewayModelNotFoundError`) — the dated id is not in the
-catalog, so no turn could complete at all. Repointed to `anthropic/claude-haiku-4.5`
-before any other work. All behavioural observations below were made against Haiku 4.5.
-
----
-
-## 1. Cross-tenant policy leak via an unkeyed module-level cache — FIXED
-
-**File:** `agent/lib/policy-store.ts`
-
-**What it was.** `getCompanyPolicy()` memoized into a module-level `activePolicy` with no
-key:
-
-```ts
-let activePolicy: tCompanyPolicy | null = null;
-export function getCompanyPolicy(companyId: string): tCompanyPolicy {
-  if (activePolicy) return activePolicy;      // companyId ignored after the first call
-  ...
-}
-```
-
-The comment claimed the memo was scoped "within a review", but a module-level binding in a
-long-lived server process lives for the *process*. The first company looked up won for
-every subsequent lookup, whoever asked.
-
-**How I confirmed it.** Drove all five fixtures through a running dev server, then
-restarted the process and ran two of them in the opposite order. The leak reversed with
-the ordering, which rules out model error:
-
-| Run | Position | Fixture (company) | Rule cited | Correct? |
-|-----|----------|-------------------|------------|----------|
-| A | 1st | ambiguous (acme) | acme SW-01, $200/month | yes |
-| A | 2nd | cross-company (**initech**) | **acme** MEAL-01, "$50 per attendee" | no — approved |
-| A | 3rd | illegible (**globex**) | **acme** TRVL-01, "$1,500 director approval" | no |
-| B | 1st | cross-company (initech) | initech MEAL-01, $25/attendee | yes |
-| B | 2nd | request (**acme**) | **initech** MEAL-01, "$25 per attendee" | no — flagged |
-
-Both error directions are real money: in run A, Initech's $40 meal was approved against
-Acme's more generous $50 cap; in run B, Acme's in-policy $96 meal for two was flagged
-against Initech's $25 cap. The cited rule id looks plausible every time because all three
-companies happen to name their meal rule `MEAL-01` — asserting on the id alone would not
-have caught this.
-
-**What I changed.** Removed the cache outright. `POLICIES` is an in-memory object literal,
-so the lookup is already O(1) and the memo bought nothing measurable while costing tenant
-isolation. Left a comment stating that any future cache must be keyed by `companyId` and
-scoped to the request.
-
-**The eval that would have caught it.** `scripts/policy-isolation.test.ts`
-(`bun run scripts/policy-isolation.test.ts`). Six assertions; all six fail against the old
-code and pass against the new.
-
-The important design point: **this bug is invisible to a one-request eval.** The first
-lookup in any process is always correct — only the second onward is poisoned. Both shipped
-evals boot a fresh agent, send one submission, and assert on the result, so they would pass
-against broken code no matter how carefully they asserted. The regression test deliberately
-makes multiple lookups per process, and asserts on rule *text* rather than rule *id*.
-
-It is a plain script rather than an `evals/*.eval.ts` for two reasons: the store is pure and
-synchronous so it needs no model tokens, and the eve eval harness cannot currently run at
-all (finding 3).
+One theme runs through most of it: **prefer making a bad state unrepresentable over detecting
+it**. A prompt instruction is a request; an absent parameter is a guarantee.
 
 ---
 
-## 2. Unknown `company_id` silently resolved to Acme — FIXED
+## 0. Nothing ran at all
 
-**File:** `agent/lib/policy-store.ts` (same function, separate defect)
+Two things had to be fixed before any of the rest could be observed, and both are worth
+recording because they explain how the planted bugs survived.
 
-`POLICIES[companyId] ?? POLICIES.acme` handed Acme's policy to any unrecognised company. A
-typo in `company_id` produced a confident decision under the wrong tenant's rules instead of
-an error. Same isolation breach as finding 1, reached by a different path.
+**The model pin was dead.** `anthropic/claude-opus-4-1-20250805` returns 404 from the Vercel
+Gateway — I probed the catalog directly; no opus-4.1 id resolves in any form. Every request
+failed with `GatewayModelNotFoundError`. Repointed to `anthropic/claude-haiku-4.5`, which is
+also the right size for a three-way classification against four short rules.
 
-Now throws, naming the offending id. There is no default tenant. Covered by the last two
-assertions in `scripts/policy-isolation.test.ts`.
+**The eval suite had never executed.** `agent/channels/eve.ts` was named `eve`, the same name
+as Eve's built-in channel, so it *replaced* it — taking `/eve/v1/session` with it. The compiled
+manifest showed one surviving channel. `bunx eve eval` posts to `/eve/v1/session`, so both
+shipped evals died in 87ms on a 404 before a single assertion ran. Renamed to `review.ts`.
 
-*Fixed as a separate commit from finding 1 — they are independent defects that happen to
-share a function.*
-
----
-
-## 3. The custom channel shadowed Eve's built-in one, so no eval could run — FIXED
-
-**File:** `agent/channels/eve.ts`
-
-The file is named `eve`, the same name as Eve's built-in channel, so it replaces it. The
-built-in channel owns `/eve/v1/session`, `/eve/v1/session/:id`, and the stream route. The
-compiled manifest shows exactly one channel surviving:
-
-```json
-"channels": [{"name":"eve","logicalPath":"channels/eve.ts",
-              "method":"POST","urlPath":"/eve/v1/review"}]
-```
-
-`bunx eve eval` drives the agent by POSTing to `/eve/v1/session`, which no longer exists.
-Both shipped evals fail in 87ms with `404 Cannot find any route matching [POST]
-/eve/v1/session` — before a single assertion runs. Confirmed independently by probing the
-live server: `POST /eve/v1/session` → 404, `POST /eve/v1/review` → 200.
-
-**What I changed.** Renamed the module to `agent/channels/review.ts`, after the route it
-serves. The built-in channel is restored alongside it. Verified three ways: the built
-routes now include both `eve/v1/session` and `eve/v1/review`; `POST /eve/v1/session` with
-an empty body returns 400 "Missing or empty 'message' field" instead of 404; and
-
-```
-✓  approve-valid    gates 3/3
-✓  policy-citation  gates 1/1  judge.autoevals.closedQA: 100%
-Results: 2 passed (2 total) — Gates: 4 passed — Completed in 10.4s
-```
-
-The eval suite had never executed. That is a large part of why the planted bugs survived,
-and it is why finding 1's regression test was written as a plain script instead.
+That second one matters more than it looks. The repo appeared to have a test suite. It did not.
 
 ---
 
-## 4. Prompt is assembled volatile-first, so nothing is cacheable — OPEN
+## 1. Cross-tenant policy leak — the one that pays out real money
 
-**File:** `agent/lib/build-instructions.ts`
+`getCompanyPolicy` memoized into a module-level `activePolicy` with no key. The comment said
+the memo was scoped "within a review"; a module-level binding in a long-lived server process
+lives for the *process*. The first company looked up won for every later lookup, whoever asked.
 
-`buildSystemPrompt` prepends the per-request submission JSON and an ISO timestamp to the
-static header, steps, and rubric. Prompt caching keys on a shared prefix, and this prompt
-begins with the one thing that differs on every request, so the ~700 tokens of identical
-rubric that follow can never be reused.
+**How I knew.** I drove all fixtures through a running server, then restarted and ran two in the
+opposite order. The leak reversed with the ordering, which rules out model error:
 
-Measured via `agent/hooks/usage-log.ts` across a five-fixture run: **all ten steps reported
-`cacheReadTokens: 0, cacheWriteTokens: 0`**, at roughly 4,100 input tokens per review
-(two model steps: ~1,900 then ~2,200).
+| run | fixture (company) | rule cited | outcome |
+|---|---|---|---|
+| A | cross-company (**initech**) | **acme** MEAL-01, $50/attendee | approved — real cap is $25 |
+| B | request (**acme**) | **initech** MEAL-01, $25/attendee | flagged — in-policy claim |
 
-Inverting the order — static rubric first, volatile block last — is the standard fix and
-changes no behaviour. Any claimed improvement should be re-measured against the same hook.
+Both directions cost money: one overpays, the other buries a valid claim in a human queue.
 
----
+**What I changed.** Deleted the cache rather than keying it — `POLICIES` is an in-memory object
+literal, so the lookup was already O(1) and the memo bought nothing measurable while costing
+tenant isolation. Separately, `POLICIES[id] ?? POLICIES.acme` handed Acme's rules to any
+unrecognised company; that now throws. Two commits: same function, independent defects.
 
-## 5. `cited_rule` can be fabricated — GUARDRAILED (partially closed)
-
-**File:** `agent/lib/expense.schema.ts` / `agent/tools/search_policy.ts`
-
-Surfaced by the fix to finding 1: with the correct tenant's policy now being retrieved,
-`illegible.json` (globex, travel) returned
-
-> `TRVL-01: Travel expenses require proper documentation and verification`
-
-Globex's actual TRVL-01 reads *"Any travel expense over $2,000 requires finance approval."*
-The cited text appears in **no** company's policy — grepped `agent/lib/policies.ts` to
-confirm. The rule *id* is real; the rule *text* is invented.
-
-`cited_rule` is a free-form `z.string().min(1)` that the model writes, and nothing checks it
-against the rules `search_policy` actually returned. The existing `policy-citation` eval
-asks a judge whether the citation looks "specific and concrete rather than vague or
-invented" — a fabricated-but-plausible rule passes that bar comfortably, which is why the
-eval would not catch this.
-
-Worth noting this was masked by finding 1: while every review was being answered from one
-cached policy, a wrong-looking citation was indistinguishable from the leak.
-
-**What I added.** A fail-closed guardrail: `agent/lib/verify-citation.ts`, called from
-`agent/channels/eve.ts` immediately after `ExpenseDecisionSchema.safeParse` succeeds. It
-resolves the company from the *request* (via `resolveExpenseSubmission`, the same resolver
-the prompt was built from — never a model-supplied value) and checks the citation against
-that company's own policy. On failure the route returns `{ok: false}` / 502 and logs.
-
-Three checks, in order:
-
-1. **No rule id** → reject. The prompt instructs the model to include the id; a citation
-   without one cannot be verified against anything.
-2. **Id not in this company's policy** → reject. Covers both a rule belonging to another
-   tenant and a fabricated id that exists nowhere.
-3. **Verbatim foreign rule text under a locally-valid id** → reject. Necessary because rule
-   ids collide — every company here defines a `MEAL-01` — so an id check alone would have
-   passed the recorded leak. Uses a 6-word verbatim run, and only fires when that wording
-   does not also appear in this company's own policy.
-
-**The guardrail must not become the leak.** The HTTP response never names another tenant or
-quotes their rule text; "belongs to another company" and "exists nowhere" return the same
-public message, since distinguishing them would confirm another company's rule inventory to
-an unauthenticated caller. Full detail goes to the server log only. Asserted in the tests.
-
-**Proof.** `scripts/verify-citation.test.ts` — 13 assertions. The negative cases are the
-*verbatim recorded leaks* from run A (acme's MEAL-01 text served into an initech review;
-acme's TRVL-01 into globex). The positive cases are the *actual* decisions
-`./scripts/check.sh` produces, so a false positive fails the suite.
-
-One positive case is worth keeping: for `cross-company.json` the model wrote
-`"...up to $25 per attendee (limit: $50 for 2 attendees)"` — correctly deriving 2 × $25 and
-landing on $50, a figure that appears nowhere in initech's policy and happens to equal
-Acme's cap. Any guardrail keying on dollar amounts would reject that valid decision. This
-is why the check keys on rule ids and verbatim text instead.
-
-Verified live: all five fixtures still return `ok: true`, and a POST with
-`company_id: "wayne-enterprises"` — which before finding 2's fix would have been silently
-adjudicated against Acme's rules — now returns
-`{"ok":false,"error":"Decision rejected: The submission's company has no configured expense policy."}`
-with the full reason in the server log.
-
-**Residual gap — since closed.** The checks above catch cross-tenant citations and
-fabricated *ids*, but not a plausible *paraphrase* invented for a rule id that genuinely
-belongs to the company — exactly the `illegible.json` case that surfaced this finding. No
-string check separates a good paraphrase from a bad one, so the fix is structural rather
-than heuristic:
-
-- `ExpenseDecisionSchema` gained a required `cited_rule_id` — the rule's id as
-  `search_policy` returned it. The decision now names the rule by **identity**.
-- The guardrail resolves that id against this company's policy and returns the resolved
-  rule to the channel.
-- The channel **replaces** `cited_rule` with the verbatim text from the policy store,
-  formatted `[ID] (category) text`. The model's own wording stays in `reason`, where
-  derived working (a per-attendee cap times attendee count) belongs.
-
-Invented policy text can no longer reach a caller, because the returned text never comes
-from the model. Live across all five fixtures:
-
-```
-ambiguous.json     SW-01    [SW-01] (software) Software or SaaS up to $200 per month is auto-approved; ...
-cross-company.json MEAL-01  [MEAL-01] (meals) Meals are reimbursed up to $25 per attendee.
-illegible.json     TRVL-01  [TRVL-01] (travel) Any travel expense over $2,000 requires finance approval ...
-request.json       MEAL-01  [MEAL-01] (meals) Business meals are reimbursed up to $50 per attendee; ...
-```
-
-The free-text checks are kept, and they still reject rather than silently canonicalising: a
-decision quoting another tenant's rule text means the *reasoning* was wrong, not just the
-prose, and rewriting the citation would paper over that.
-
-**Cost note — since fixed.** The guardrail runs after the model turn, so an unknown
-`company_id` used to pay for a full review before rejection. It is now validated at ingress
-before `send()`, returning 400 in ~40ms for zero tokens, along with full shape validation
-of the submission body (previously a bare `body as tExpenseSubmission` cast with no checks
-at all). Both layers are kept: ingress validates the request, the citation check validates
-what the model produced, and neither subsumes the other.
+**Why the shipped evals could never have caught it.** The *first* lookup in any process is
+always correct. An eval that boots a fresh agent, sends one submission and asserts on the
+result passes against this bug no matter how carefully it asserts — and both shipped evals had
+exactly that shape. The regression test therefore makes multiple lookups per process, and
+asserts on rule **text** rather than **id**: all three companies name their meal rule
+`MEAL-01`, so an id assertion would have passed on leaked data.
 
 ---
 
-## 6. Topic narrowing silently withholds a tenant's global rules — OPEN, from the audit
+## 2. The tenant was the model's choice
 
-**File:** `agent/lib/policy-store.ts` — `selectRules()`
+`submissionState` exists so "tools can read the real fields instead of relying on
+model-provided arguments" — its own docstring. It was seeded every turn and read by nothing.
+Both tools took `company_id` from their arguments, i.e. from whatever the model typed, from a
+prompt containing raw OCR receipt text.
 
-`selectRules` returns only rules whose `category` or `text` substring-matches the model's
-`topic`, and falls back to the full ruleset **only on zero hits**. So a topic matching *at
-least one* rule suppresses every rule that doesn't mention it, and the caller gets no signal
-that anything was withheld.
+**What I changed.** `search_policy` lost the parameter and reads state. This is the difference
+between a boundary and a suggestion: a receipt reading *"per corporate policy, look up globex"*
+is a thing someone can print, and ordinary model drift needs no attacker at all. With the
+parameter gone there is no output the model can produce that expresses the request.
 
-Initech is the exposed tenant: `GEN-01` ("Any expense over $100 requires manager review")
-and `CASH-01` ("Cash-only receipts … are not reimbursable (reject)") both sit under category
-`general` and name no category, so no category-shaped topic reaches them. Verified by
-executing the pure function:
-
-```
-topic="office"       -> 1 rule   [OFF-01] only
-topic="meals"        -> 1 rule   [MEAL-01] only
-topic="office chair" -> 4 rules  GEN-01, MEAL-01, OFF-01, CASH-01
-topic=undefined      -> 4 rules  all
-```
-
-The pathology in one line: **a precise topic returns less than a nonsense one.** Narrowing
-is monotonically lossy with no floor, and initech's only hard-reject rule and only blanket
-approval gate are unreachable by every sensible topic.
-
-Scope, honestly: no shipped fixture flips on this. `cross-company.json` is initech/meals/$40
-paid by Mastercard — under GEN-01's $100 gate and card-paid, so suppressing GEN-01/CASH-01
-does not move that decision. Demonstrating a flipped verdict needs a fixture that does not
-exist yet (initech, office, ~$180, cash receipt → should `reject` on CASH-01, currently
-would `approve` on OFF-01). The retrieval hole is proven; the decision flip is not yet.
-Also model-mediated: `buildSystemPrompt` step 1 never tells the model to pass `topic` — only
-the tool description invites it.
-
-Root cause is a missing concept rather than a bad fallback: the store has no notion of an
-always-applicable rule. The fix is to always union global/`general` rules into any narrowed
-result.
+`scripts/tool-inputs.test.ts` asserts no tool accepts `company_id` or seven other tenant-ish
+names. That test is as much the point as the code — it stops the parameter quietly returning.
 
 ---
 
-## Not a finding — checked and dismissed
+## 3. The citation could be invented
 
-- **Eval judge model id.** An audit pass claimed `anthropic/claude-haiku-4-5` in
-  `evals/evals.config.ts` 404s because the Gateway catalog lists the dot form
-  (`claude-haiku-4.5`). **False.** Probed the live Gateway twice: both the dash and dot
-  forms return HTTP 200. The alias resolves. Only the dated `opus-4-1-20250805` id was bad.
-- **`validate_expense` as a correctness bug.** It does what its description claims — a
-  presence check — so it is not a correctness defect. It is dead weight (below), not a
-  wrong-answer source.
-- **The fixture fallback as a tenant-security breach.** A bare `{}` body does review
-  `fixtures/request.json` and return 200, but there is no tenant boundary for it to cross:
-  the route passes `{ auth: null }` and has no authentication at all, so any caller can
-  legitimately request any company. It is a dev convenience on a production route, which is
-  a design smell, not a disclosure primitive.
-- **Receipt size as a cost risk.** Claimed that pretty-printing the submission inflates
-  large receipts ~22%. Measured: for a large receipt the overhead is +106 chars (+0.13%),
-  because `JSON.stringify` indents structure, not the interior of a single string. The 22%
-  figure only holds where the absolute cost is ~30 tokens.
-- **`validate_expense` forcing an extra model round-trip.** The prompt says "You may call
-  validate_expense" — permissive, and nothing in the harness forces a tool call.
+`cited_rule` was free text the model wrote, tied to nothing. Fixing the leak surfaced this: a
+globex review returned `TRVL-01: Travel expenses require proper documentation and
+verification`. Real rule id; that text appears in **no** company's policy. I grepped to confirm.
 
-**Standing caveat:** `POST /eve/v1/review` has no authentication whatsoever
-(`{ auth: null }`, `agent/channels/eve.ts:68`). Several tenant-security findings are milder
-than they first appear for that reason — an attacker need not trick the agent into leaking
-another tenant's policy when they can simply ask for it directly. I read this as out of
-scope for the skeleton rather than a planted bug, but it is the reason I down-rated two
-findings, so it is recorded here.
+No string check reliably separates a good paraphrase from a fabrication, so the fix is
+structural rather than heuristic. The model now supplies **identity** (`cited_rule_id`) and the
+platform supplies **content**: the channel writes the rule's verbatim text from the store.
+Invented policy text cannot reach a caller because there is no field to invent it in.
+
+A guardrail still runs before that, and rejects rather than silently canonicalising: a decision
+quoting a neighbour's rule text means the *reasoning* was wrong, not just the prose. Its third
+check is load-bearing — because ids collide, the recorded leak cited a locally-valid id while
+quoting Acme's text, which an id-only check waves straight through.
+
+**The guardrail must not become the leak.** Its HTTP response never names another tenant or
+quotes their rules; "belongs to another company" and "exists nowhere" return the same public
+message, since distinguishing them would confirm a rival's rule inventory to an unauthenticated
+caller. Full detail goes to the server log only. Asserted.
 
 ---
 
-## Noted, deliberately not fixed yet
+## 4. Retrieval silently withheld the rules that matter
 
-- **`validate_expense` validates almost nothing** (`agent/tools/validate_expense.ts`). It
-  confirms three fields are present and returns. It never reconciles `line_items` against
-  `claimed_amount`, despite the prompt instructing the model to "double-check that the
-  receipt totals add up". Also carries dead scaffolding: an unused `data` object, a `tmp`
-  string built and discarded, and `_label` / `_status` computed then dropped by the caller.
-- **Both tools read `company_id` from model-supplied arguments** while the authoritative
-  value sits unread in `submissionState` — whose docstring says it exists precisely "so
-  tools can read the real fields instead of relying on model-provided arguments". The
-  guardrail was designed and never wired up. This is the next tenant-security fix; it is
-  separate from finding 1 and survives it.
-- **`selectRules` returns all rules when a topic matches nothing**
-  (`agent/lib/policy-store.ts`). Defensible as a recall choice, but undocumented, and it
-  means a "narrowed" search may not be narrowed — a cost as well as a clarity issue.
-- **`fixtures/valid.json` and `fixtures/request.json` are byte-identical**, and
-  `ambiguous` / `illegible` / `cross-company` are exercised by nothing in the eval suite.
+`selectRules` narrowed to substring matches and fell back to the full set only on *zero* hits,
+so a precise topic returned less than a nonsense one:
+
+```
+searchPolicy("initech", "office")       -> OFF-01 only
+searchPolicy("initech", "office chair") -> all four rules
+```
+
+Initech's `GEN-01` (every expense over $100 needs review) and `CASH-01` (cash receipts →
+reject) sit under category `general` and name no category, so no sensible topic reached them —
+the company's only blanket gate and its only hard reject, invisible.
+
+The root cause is a missing concept, not a bad fallback: the store had no way to say "this rule
+applies regardless of category". Rules gained an explicit `scope: "global"`. Three are tagged
+by their own wording, including Acme's `ALC-01` — *"Alcohol is not reimbursable under any
+circumstances"* — which is categorised `alcohol` and was hidden from a **meals** lookup. A meal
+receipt is exactly where an alcohol line item appears.
+
+A follow-up commit fixes a regression the first introduced: the "did anything match?" test was
+derived from the filtered output using `scope` as a proxy, so a topic whose only hit was itself
+a global rule read as "nothing matched" and narrowing switched off. My own suite missed it; a
+review pass caught it.
+
+---
+
+## 5. Nobody checked the arithmetic
+
+The prompt had always said "double-check that the receipt totals add up". Nothing summed
+`line_items` — three references in the whole codebase, all of them the schema or the prompt
+payload. The tool nominally offered for the job returned `{"valid":true}` on a 10× overclaim.
+
+`verify_totals` does it in code and hands the model a fact. Two decisions: money arrives as
+floats, so comparison is in whole **cents** — exact for this domain, and unlike an epsilon it
+keeps a genuine one-cent discrepancy visible. And "no line items" is its own status, never
+`reconciled`; an unverifiable claim must not read as a verified one.
+
+The tool takes **no arguments**, reading the submission from state. A tool that accepts the
+figures it is meant to be verifying can only confirm what the caller already claimed.
+
+---
+
+## 6. Currencies were compared as if they were the same one
+
+Submissions carry `currency`. Every policy limit is a bare `$` meaning USD. Nothing reconciled
+them — four mentions of `currency` in `agent/`, not one a comparison.
+
+The failure isn't that non-USD claims were handled badly; the number was treated *as though it
+were dollars*. Live, an acme meal for two claiming 900 MXN (~$45, well inside the
+$50-per-attendee cap) was **rejected**:
+
+> "Policy MEAL-01 limits business meals to $50 per attendee, allowing maximum 100 MXN
+> equivalent for 2 people."
+
+An invented 1:1 rate, refusing money someone was owed. The mirror case costs more: a stronger
+currency understates the number, so an over-cap claim reads as under it.
+
+There is no FX rate here and inventing one would be worse than the bug, so a non-USD claim is
+declared not comparable and forced to `flag_for_review`. **This overrides `reject` as well as
+`approve`** — deliberately. A reject is normally conservative, but a reject reached by
+comparing pesos to dollars is precisely the recorded bug. Over-flagging costs a human glance;
+either wrong answer costs money.
+
+---
+
+## 7. Cost
+
+`buildSystemPrompt` opened with the submission JSON and a timestamp — the two things that
+change every request — so the identical instruction block that followed could never be reused.
+Static now leads, giving an 86.8% byte-identical shared prefix between two differing requests.
+
+Stated precisely: this makes the prompt **cache-ready**, not cached. Caching also needs a cache
+breakpoint that is not set, and `cacheReadTokens` is `0` on every observed step. The commit
+claims no measured saving; the test asserts the structural precondition instead. The audit
+trail records the cache columns anyway so the before/after is already in the data when a
+breakpoint is added.
+
+Also on cost: unknown tenants and malformed bodies are now rejected at ingress in ~40ms for
+zero tokens instead of after a full review, and `validate_expense` was deleted — with the
+submission schema enforced at ingress it could not return `valid:false` for anything reaching
+the model, while still costing tokens in the tool definitions on every request.
+
+---
+
+## What I deliberately did not do
+
+**A retrieval ledger.** The strongest version of the citation check is provenance, not
+similarity: have `search_policy` record the rule ids it returned this turn and assert
+`cited_rule_id ∈ ledger`. That is exact, tenant-count-independent, and catches a case the
+current check cannot see — a model citing a real own-company rule it never retrieved. I did not
+build it because the check runs after the turn, where Eve's state handles are not readable; it
+needs either a hook or extracting tool outputs from the event stream. Real work, not a
+one-liner. Needing to tune `SHINGLE_WORDS` is the tell that the current check is a proxy.
+
+**Dropping the text-similarity check.** Once tools read state, cross-tenant *retrieval* is
+structurally impossible, so that check is close to dead code. I kept it as a backstop against a
+state-seeding failure rather than deleting a tested security check during a refactor. Worth
+revisiting.
+
+**`POST /eve/v1/review` has no authentication** (`auth: null`). This down-rates several
+tenant-security findings honestly: an attacker need not trick the agent into leaking another
+tenant's policy when they can request it directly. I read this as scaffolding the exercise
+omitted rather than a planted bug, but it is why I rated the unknown-company fallback as
+fail-open robustness rather than an exploitable disclosure.
+
+**Prompt-builder style.** `header()`/`steps()`/`rubric()` build strings by repeated `x = x +
+"..."`. Converting to template literals is a genuine improvement and a whole-file diff that
+would bury the ordering change that matters.
+
+**Compacting the submission JSON.** Measured rather than assumed: pretty-printing costs +22% on
+a small fixture but only +106 chars (+0.13%) on a large receipt, because `JSON.stringify`
+indents structure and not the interior of a string. It saves ~30 tokens where cost is already
+trivial, at some cost to legibility. Not worth it.
+
+**A claim that was raised and is simply wrong.** An audit pass reported the eval judge id
+`anthropic/claude-haiku-4-5` as 404ing because the Gateway catalog displays the dot form. I
+probed the live Gateway: both the dash and dot aliases return 200, and the judge subsequently
+scored a run at 100%. Recorded so it does not resurface.
+
+---
+
+## Verification
+
+Everything below was run, not assumed.
+
+| check | result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bunx eve build` | ok |
+| `bun run test` | **69 assertions**, 8 pure suites, exit 0 |
+| `bunx eve eval` | **4 passed / 4**, gates 11/11, judge 100% |
+| `./scripts/check.sh` | **7 fixtures**, all `ok:true`, exit 0 |
+
+The split is deliberate. The pure suites cover everything checkable without a model and run in
+CI on every push. The evals cover what only an end-to-end run can — that tools are registered,
+that the prompt gets them called, and that `submissionState` is genuinely readable inside a
+tool at execution time. They are **excluded from CI** on purpose: they need a gateway key,
+spend tokens per commit, cannot read secrets on fork PRs, and one is LLM-judged, so red would
+not reliably mean regression.
+
+Two honesty notes. The same illegible-receipt fixture has returned both `reject` and
+`flag_for_review` across runs, citing the correct rule each time — genuine model
+non-determinism on an ambiguous case, and the reason the deterministic suite carries the
+weight it does. And several bugs here were found by testing rather than reading, including two
+of my own: a regression in the narrowing fix, and an intermittent 502 caused by requiring a
+field from the model that the server then overwrote.
