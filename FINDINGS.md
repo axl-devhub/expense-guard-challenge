@@ -83,7 +83,7 @@ share a function.*
 
 ---
 
-## 3. The custom channel shadows Eve's built-in one, so no eval can run — OPEN
+## 3. The custom channel shadowed Eve's built-in one, so no eval could run — FIXED
 
 **File:** `agent/channels/eve.ts`
 
@@ -101,7 +101,19 @@ Both shipped evals fail in 87ms with `404 Cannot find any route matching [POST]
 /eve/v1/session` — before a single assertion runs. Confirmed independently by probing the
 live server: `POST /eve/v1/session` → 404, `POST /eve/v1/review` → 200.
 
-This blocks every other eval, so it should be fixed before writing more of them.
+**What I changed.** Renamed the module to `agent/channels/review.ts`, after the route it
+serves. The built-in channel is restored alongside it. Verified three ways: the built
+routes now include both `eve/v1/session` and `eve/v1/review`; `POST /eve/v1/session` with
+an empty body returns 400 "Missing or empty 'message' field" instead of 404; and
+
+```
+✓  approve-valid    gates 3/3
+✓  policy-citation  gates 1/1  judge.autoevals.closedQA: 100%
+Results: 2 passed (2 total) — Gates: 4 passed — Completed in 10.4s
+```
+
+The eval suite had never executed. That is a large part of why the planted bugs survived,
+and it is why finding 1's regression test was written as a plain script instead.
 
 ---
 
@@ -184,17 +196,40 @@ adjudicated against Acme's rules — now returns
 `{"ok":false,"error":"Decision rejected: The submission's company has no configured expense policy."}`
 with the full reason in the server log.
 
-**Residual gap, stated plainly.** This catches cross-tenant citations and fabricated *ids*.
-It does not catch a plausible *paraphrase* invented for a rule id that genuinely belongs to
-the company — exactly the `illegible.json` case that surfaced this finding. Closing that
-needs the decision to reference the retrieved rule by identity rather than by re-typed
-prose (e.g. having `search_policy` return rule ids the channel can match against, or
-narrowing `cited_rule` to an enum of ids plus a separate free-text field).
+**Residual gap — since closed.** The checks above catch cross-tenant citations and
+fabricated *ids*, but not a plausible *paraphrase* invented for a rule id that genuinely
+belongs to the company — exactly the `illegible.json` case that surfaced this finding. No
+string check separates a good paraphrase from a bad one, so the fix is structural rather
+than heuristic:
 
-**Cost note.** The guardrail runs *after* the model turn, so an unknown `company_id` still
-pays for a full review before being rejected. Validating `company_id` at ingress in the
-channel, before `send()`, would reject it for zero tokens. Worth doing; not done here
-because it is a separate change from the guardrail that was asked for.
+- `ExpenseDecisionSchema` gained a required `cited_rule_id` — the rule's id as
+  `search_policy` returned it. The decision now names the rule by **identity**.
+- The guardrail resolves that id against this company's policy and returns the resolved
+  rule to the channel.
+- The channel **replaces** `cited_rule` with the verbatim text from the policy store,
+  formatted `[ID] (category) text`. The model's own wording stays in `reason`, where
+  derived working (a per-attendee cap times attendee count) belongs.
+
+Invented policy text can no longer reach a caller, because the returned text never comes
+from the model. Live across all five fixtures:
+
+```
+ambiguous.json     SW-01    [SW-01] (software) Software or SaaS up to $200 per month is auto-approved; ...
+cross-company.json MEAL-01  [MEAL-01] (meals) Meals are reimbursed up to $25 per attendee.
+illegible.json     TRVL-01  [TRVL-01] (travel) Any travel expense over $2,000 requires finance approval ...
+request.json       MEAL-01  [MEAL-01] (meals) Business meals are reimbursed up to $50 per attendee; ...
+```
+
+The free-text checks are kept, and they still reject rather than silently canonicalising: a
+decision quoting another tenant's rule text means the *reasoning* was wrong, not just the
+prose, and rewriting the citation would paper over that.
+
+**Cost note — since fixed.** The guardrail runs after the model turn, so an unknown
+`company_id` used to pay for a full review before rejection. It is now validated at ingress
+before `send()`, returning 400 in ~40ms for zero tokens, along with full shape validation
+of the submission body (previously a bare `body as tExpenseSubmission` cast with no checks
+at all). Both layers are kept: ingress validates the request, the citation check validates
+what the model produced, and neither subsumes the other.
 
 ---
 

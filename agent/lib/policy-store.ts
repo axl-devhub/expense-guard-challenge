@@ -45,6 +45,14 @@ function selectRules(policy: tCompanyPolicy, topic: string | undefined): tPolicy
   return hits;
 }
 
+// Look up a single rule within one company's policy. Used by the citation guardrail to
+// resolve a decision's cited_rule_id to its verbatim text.
+export function findRule(companyId: string, ruleId: string): tPolicyRule | undefined {
+  const policy = getCompanyPolicy(companyId);
+  const wanted = ruleId.trim().toUpperCase();
+  return policy.rules.find((r) => r.id.toUpperCase() === wanted);
+}
+
 export function searchPolicy(
   companyId: string,
   topic: string | undefined,

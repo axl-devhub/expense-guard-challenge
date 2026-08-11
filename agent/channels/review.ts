@@ -133,13 +133,18 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         );
       }
 
-      const citation = verifyCitation(companyId, parsed.data.cited_rule);
+      const citation = verifyCitation(
+        companyId,
+        parsed.data.cited_rule_id,
+        parsed.data.cited_rule,
+      );
       if (!citation.ok) {
         console.error("[expense-guard] REJECTED decision — citation check failed", {
           company_id: companyId,
           code: citation.code,
           detail: citation.logDetail,
           decision: parsed.data.decision,
+          cited_rule_id: parsed.data.cited_rule_id,
           cited_rule: parsed.data.cited_rule,
         });
         return Response.json(
@@ -148,7 +153,17 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         );
       }
 
-      return Response.json({ ok: true, data: parsed.data }, { status: 200 });
+      // Return the rule verbatim from the policy store rather than the model's rendering
+      // of it. The id was verified against this company's policy above, so this makes an
+      // invented or paraphrased rule text structurally unable to reach the caller — the
+      // model's own wording stays in `reason`, where it belongs.
+      const data = {
+        ...parsed.data,
+        cited_rule_id: citation.rule.id,
+        cited_rule: `[${citation.rule.id}] (${citation.rule.category}) ${citation.rule.text}`,
+      };
+
+      return Response.json({ ok: true, data }, { status: 200 });
     }),
   ],
 });

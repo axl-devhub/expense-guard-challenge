@@ -8,8 +8,8 @@
 //
 // It answers exactly one question: does the cited rule belong to THIS company's policy?
 // It deliberately does not judge whether the rule justifies the decision.
-import { POLICIES } from "./policies.js";
-import { getCompanyPolicy } from "./policy-store.js";
+import { POLICIES, type tPolicyRule } from "./policies.js";
+import { findRule, getCompanyPolicy } from "./policy-store.js";
 
 export type tCitationFailureCode =
   | "unresolvable_policy"
@@ -18,7 +18,7 @@ export type tCitationFailureCode =
   | "foreign_rule_text";
 
 export type tCitationCheck =
-  | { ok: true }
+  | { ok: true; rule: tPolicyRule }
   | {
       ok: false;
       code: tCitationFailureCode;
@@ -31,7 +31,12 @@ export type tCitationCheck =
     };
 
 // Rule ids in this policy set look like MEAL-01, TRVL-01, GEN-01, CASH-01, SW-01.
+// The scanning pattern is uppercase-only on purpose: it runs over free-form prose, where a
+// case-insensitive match would fire on ordinary hyphenated tokens.
 const RULE_ID_PATTERN = /\b[A-Z]{2,8}-\d{1,3}\b/g;
+// The dedicated cited_rule_id field is allowed to be sloppy — "[meal-01]" is still a
+// recognisable id — but it must at least have the shape of one.
+const RULE_ID_SHAPE = /\b[A-Za-z]{2,8}-\d{1,3}\b/;
 
 // Length of the verbatim word run used to detect copied foreign rule text. Long enough
 // that ordinary paraphrase of a company's own rule will not trip it, short enough that
@@ -56,7 +61,11 @@ function shingles(words: string[], size: number): string[] {
   return out;
 }
 
-export function verifyCitation(companyId: string, citedRule: string): tCitationCheck {
+export function verifyCitation(
+  companyId: string,
+  citedRuleId: string,
+  citedRule: string,
+): tCitationCheck {
   let ownPolicy;
   try {
     ownPolicy = getCompanyPolicy(companyId);
@@ -71,20 +80,32 @@ export function verifyCitation(companyId: string, citedRule: string): tCitationC
   }
 
   const ownIds = new Set(ownPolicy.rules.map((r) => r.id));
-  const citedIds = citedRule.match(RULE_ID_PATTERN) ?? [];
 
-  // The system prompt instructs the model to put the rule's id in cited_rule. A citation
-  // with no id cannot be verified against anything, so fail closed rather than pass it on.
-  if (citedIds.length === 0) {
+  // The decision names the rule by id. Resolving that id against this company's policy is
+  // what makes the returned rule text authoritative rather than model prose.
+  const normalizedId = (citedRuleId.match(RULE_ID_SHAPE)?.[0] ?? "").toUpperCase();
+  const rule = normalizedId ? findRule(companyId, normalizedId) : undefined;
+  if (!rule) {
+    const owners = Object.values(POLICIES)
+      .filter((p) => p.company_id !== companyId && p.rules.some((r) => r.id === normalizedId))
+      .map((p) => p.company_id);
     return {
       ok: false,
-      code: "no_rule_id",
-      publicMessage: "The decision did not cite an identifiable policy rule.",
-      logDetail: `cited_rule contained no rule id: ${JSON.stringify(citedRule)}`,
+      code: normalizedId ? "foreign_or_unknown_rule" : "no_rule_id",
+      publicMessage: normalizedId
+        ? `The decision cited rule "${normalizedId}", which is not part of this company's policy.`
+        : "The decision did not cite an identifiable policy rule.",
+      logDetail: !normalizedId
+        ? `cited_rule_id was not a rule id: ${JSON.stringify(citedRuleId)}`
+        : owners.length > 0
+          ? `cited_rule_id "${normalizedId}" belongs to [${owners.join(", ")}], not "${companyId}"`
+          : `cited_rule_id "${normalizedId}" exists in no configured policy (fabricated id)`,
     };
   }
 
-  for (const id of citedIds) {
+  // Defence in depth: any rule id the model mentions in its free-text citation must also
+  // belong to this company, so a decision cannot reason aloud from a neighbour's rule.
+  for (const id of citedRule.match(RULE_ID_PATTERN) ?? []) {
     if (ownIds.has(id)) continue;
     // Same public message whether the id belongs to another tenant or to nobody —
     // distinguishing them would confirm another company's rule inventory to the caller.
@@ -127,5 +148,5 @@ export function verifyCitation(companyId: string, citedRule: string): tCitationC
     }
   }
 
-  return { ok: true };
+  return { ok: true, rule };
 }
