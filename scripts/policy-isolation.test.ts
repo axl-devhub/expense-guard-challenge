@@ -67,6 +67,20 @@ check("searchPolicy returns each tenant's own meal limit, not a neighbour's", ()
   assert.notEqual(acme.rules, initech.rules, "two tenants returned identical rule text");
 });
 
+// Second defect in the same function: `POLICIES[companyId] ?? POLICIES.acme` silently
+// handed Acme's policy to any unrecognised company_id.
+check("an unknown company_id throws instead of silently resolving to acme", () => {
+  assert.throws(
+    () => getCompanyPolicy("not-a-real-company"),
+    /not-a-real-company/,
+    "unknown company should fail loudly, not borrow another tenant's policy",
+  );
+});
+
+check("a typo'd company_id does not quietly return acme's rules", () => {
+  assert.throws(() => searchPolicy("acmee", "meals"), /acmee/);
+});
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failing assertion(s).`);
   process.exit(1);

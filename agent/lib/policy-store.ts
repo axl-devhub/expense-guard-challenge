@@ -8,8 +8,12 @@ import { POLICIES, type tCompanyPolicy, type tPolicyRule } from "./policies.js";
 // another tenant's review. Any cache added here must be keyed by companyId and scoped to
 // the request. See scripts/policy-isolation.test.ts.
 export function getCompanyPolicy(companyId: string): tCompanyPolicy {
-  const resolved = POLICIES[companyId] ?? POLICIES.acme;
-  if (!resolved) throw new Error("No default expense policy is configured.");
+  const resolved = POLICIES[companyId];
+  if (!resolved) {
+    // No default tenant. An unrecognised company_id is a caller error, and answering it
+    // with some other company's rules is the same isolation breach as the cache was.
+    throw new Error(`No expense policy is configured for company_id "${companyId}".`);
+  }
   return resolved;
 }
 
