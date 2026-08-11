@@ -11,7 +11,7 @@ import {
   type tRequestView,
 } from "../lib/request-context.js";
 import { hasCompanyPolicy } from "../lib/policy-store.js";
-import { verifyCitation } from "../lib/verify-citation.js";
+import { finalizeDecision } from "../lib/finalize-decision.js";
 
 type tJsonOutputSchema = NonNullable<SendPayload["outputSchema"]>;
 
@@ -107,18 +107,10 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         return Response.json({ ok: false, error: `turn failed: ${failure}` }, { status: 502 });
       }
 
-      const parsed = ExpenseDecisionSchema.safeParse(result);
-      if (!parsed.success) {
-        return Response.json(
-          { ok: false, error: "Agent output did not match the decision schema." },
-          { status: 502 },
-        );
-      }
-
-      // Fail-closed citation guardrail. The model writes `cited_rule` as free text and
-      // nothing upstream ties it to the rules search_policy actually returned, so verify
-      // server-side that the cited rule belongs to this submission's company. The company
-      // is taken from the request (via the same resolver the prompt was built from), never
+      // Schema validation, the fail-closed citation guardrail, and canonicalisation of
+      // cited_rule all live in lib/finalize-decision.ts so `bunx eve eval` can exercise
+      // them too — the eval harness drives the agent through Eve's built-in session
+      // channel and never reaches this file. The company is taken from the request, never
       // from anything the model produced.
       let companyId: string;
       try {
@@ -133,37 +125,20 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         );
       }
 
-      const citation = verifyCitation(
-        companyId,
-        parsed.data.cited_rule_id,
-        parsed.data.cited_rule,
-      );
-      if (!citation.ok) {
-        console.error("[expense-guard] REJECTED decision — citation check failed", {
+      const finalized = finalizeDecision(companyId, result);
+      if (!finalized.ok) {
+        console.error("[expense-guard] REJECTED decision", {
           company_id: companyId,
-          code: citation.code,
-          detail: citation.logDetail,
-          decision: parsed.data.decision,
-          cited_rule_id: parsed.data.cited_rule_id,
-          cited_rule: parsed.data.cited_rule,
+          code: finalized.code,
+          detail: finalized.logDetail,
         });
         return Response.json(
-          { ok: false, error: `Decision rejected: ${citation.publicMessage}` },
+          { ok: false, error: `Decision rejected: ${finalized.publicMessage}` },
           { status: 502 },
         );
       }
 
-      // Return the rule verbatim from the policy store rather than the model's rendering
-      // of it. The id was verified against this company's policy above, so this makes an
-      // invented or paraphrased rule text structurally unable to reach the caller — the
-      // model's own wording stays in `reason`, where it belongs.
-      const data = {
-        ...parsed.data,
-        cited_rule_id: citation.rule.id,
-        cited_rule: `[${citation.rule.id}] (${citation.rule.category}) ${citation.rule.text}`,
-      };
-
-      return Response.json({ ok: true, data }, { status: 200 });
+      return Response.json({ ok: true, data: finalized.decision }, { status: 200 });
     }),
   ],
 });
