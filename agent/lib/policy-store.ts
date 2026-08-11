@@ -7,6 +7,12 @@ import { POLICIES, type tCompanyPolicy, type tPolicyRule } from "./policies.js";
 // returned it for every subsequent lookup in the process, serving one tenant's policy into
 // another tenant's review. Any cache added here must be keyed by companyId and scoped to
 // the request. See scripts/policy-isolation.test.ts.
+// Cheap membership check for ingress validation, so the channel can reject an unknown
+// tenant with a 400 before opening a turn instead of paying for a full review first.
+export function hasCompanyPolicy(companyId: string): boolean {
+  return Object.hasOwn(POLICIES, companyId);
+}
+
 export function getCompanyPolicy(companyId: string): tCompanyPolicy {
   const resolved = POLICIES[companyId];
   if (!resolved) {

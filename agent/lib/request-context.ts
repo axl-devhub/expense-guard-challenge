@@ -3,24 +3,52 @@
 // loads a representative submission from a fixture (override with POC_REQUEST_FILE).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import { defineState } from "eve/context";
 
-export type tExpenseLineItem = {
-  label: string;
-  amount: number;
-};
+export const ExpenseLineItemSchema = z.object({
+  label: z.string(),
+  amount: z.number().finite(),
+});
 
-export type tExpenseSubmission = {
-  company_id: string;
-  category: string;
-  claimed_amount: number;
-  currency?: string;
-  receipt: string;
-  line_items?: tExpenseLineItem[];
-  workspace_id?: string;
-  chat_id?: string;
-  label?: string;
-};
+// The submission contract, enforced at ingress. Previously the body was cast straight to
+// this type (`body as tExpenseSubmission`) with no validation at all, so a body missing
+// company_id — or carrying a number where a string belongs — reached the prompt and the
+// tools unchecked.
+export const ExpenseSubmissionSchema = z.object({
+  company_id: z.string().min(1),
+  category: z.string().min(1),
+  claimed_amount: z.number().finite().nonnegative(),
+  currency: z.string().min(1).optional(),
+  receipt: z.string().min(1),
+  line_items: z.array(ExpenseLineItemSchema).optional(),
+  workspace_id: z.string().optional(),
+  chat_id: z.string().optional(),
+  label: z.string().optional(),
+});
+
+export type tExpenseLineItem = z.infer<typeof ExpenseLineItemSchema>;
+export type tExpenseSubmission = z.infer<typeof ExpenseSubmissionSchema>;
+
+export type tBodyValidation = { ok: true } | { ok: false; problems: string[] };
+
+// Ingress check, run by the channel BEFORE a turn is opened, so a malformed submission
+// costs zero model tokens. A bare body is not an error — it is the documented dev/eval
+// path to the fixture — so only a non-empty object is validated here.
+export function validateRequestBody(body: unknown): tBodyValidation {
+  if (!isPlainObject(body) || Object.keys(body).length === 0) return { ok: true };
+
+  const parsed = ExpenseSubmissionSchema.safeParse(body);
+  if (parsed.success) return { ok: true };
+
+  return {
+    ok: false,
+    problems: parsed.error.issues.map((issue) => {
+      const path = issue.path.join(".");
+      return path ? `${path}: ${issue.message}` : issue.message;
+    }),
+  };
+}
 
 // The per-session projection carried by channel state -> metadata(state). `contextProvided`
 // tells "bare request, use fixture" apart from "a body was sent but did not survive the

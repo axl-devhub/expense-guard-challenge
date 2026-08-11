@@ -7,8 +7,10 @@ import { ExpenseDecisionSchema } from "../lib/expense.schema.js";
 import {
   buildRequestView,
   resolveExpenseSubmission,
+  validateRequestBody,
   type tRequestView,
 } from "../lib/request-context.js";
+import { hasCompanyPolicy } from "../lib/policy-store.js";
 import { verifyCitation } from "../lib/verify-citation.js";
 
 type tJsonOutputSchema = NonNullable<SendPayload["outputSchema"]>;
@@ -67,7 +69,34 @@ export default defineChannel<tRequestView | undefined, { state: tRequestView | u
         return Response.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
       }
 
+      // Ingress guardrail — runs before the turn is opened, so a malformed submission or
+      // an unknown tenant costs zero model tokens. A bare body is not rejected here: that
+      // is the documented dev/eval path to the fixture.
+      const shape = validateRequestBody(body);
+      if (!shape.ok) {
+        return Response.json(
+          { ok: false, error: "Invalid expense submission.", problems: shape.problems },
+          { status: 400 },
+        );
+      }
+
       const view = buildRequestView(body);
+
+      if (view.request && !hasCompanyPolicy(view.request.company_id)) {
+        // A caller error, not an agent failure — 400, and cheap. Before this check an
+        // unknown company_id was silently adjudicated against Acme's rules; after the
+        // policy-store fix it failed, but only after paying for a whole review.
+        console.warn("[expense-guard] rejected unknown company_id at ingress", {
+          company_id: view.request.company_id,
+        });
+        return Response.json(
+          {
+            ok: false,
+            error: `No expense policy is configured for company_id "${view.request.company_id}".`,
+          },
+          { status: 400 },
+        );
+      }
       const session = await send(
         { message: "Review the expense submission and return your decision.", outputSchema },
         { auth: null, continuationToken: `eve:${crypto.randomUUID()}`, state: view },
