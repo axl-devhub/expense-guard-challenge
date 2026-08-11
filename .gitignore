@@ -2,5 +2,6 @@ node_modules/
 .output/
 .eve/
 .workflow-data/
+.claude/
 .env
 *.log
