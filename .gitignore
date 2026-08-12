@@ -6,3 +6,5 @@ node_modules/
 logs/
 .env
 *.log
+.DS_Store
+submission/expense-guard-session-export*/
